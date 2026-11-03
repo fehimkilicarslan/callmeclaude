@@ -58,24 +58,9 @@ async function control(hub: Hub, cmd: string, body: Json): Promise<object> {
       await hub.controller.panic();
       return { ok: true };
     case 'permissions': {
-      // Report macOS privacy permissions as seen from inside the hub service (launchd context).
-      const { execFileP } = await import('./util.ts');
-      const out: Record<string, string> = { node: process.execPath };
-      try {
-        out.peekaboo = (await execFileP('/bin/zsh', ['-lc', 'peekaboo permissions'], { timeout: 15000 })).stdout.trim();
-      } catch (e) {
-        out.peekaboo = 'could not run: ' + (e as Error).message;
-      }
-      try {
-        const sw = await import('node:child_process');
-        // CGPreflightScreenCaptureAccess via a tiny Swift one-liner is heavy; use screencapture + window list instead.
-        const { stdout } = await execFileP('/usr/bin/osascript', ['-e', 'tell application "System Events" to get name of first process whose frontmost is true'], { timeout: 8000 });
-        out.accessibility = 'ok (' + stdout.trim() + ')';
-        void sw;
-      } catch (e) {
-        out.accessibility = 'YOK: ' + (e as Error).message.split('\n')[0];
-      }
-      return out;
+      // OS-specific diagnostics as seen from inside the hub service (launchd / systemd --user context).
+      const { platform } = await import('./platform/index.ts');
+      return platform.diagnostics();
     }
     case 'do': {
       const { computerTask } = await import('./brain.ts');

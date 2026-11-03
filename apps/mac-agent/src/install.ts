@@ -1,14 +1,11 @@
-import { copyFileSync, existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
 import type { Config } from './config.ts';
-import { LOG_DIR, writeAtomic } from './config.ts';
-import { execFileP } from './util.ts';
+import { writeAtomic } from './config.ts';
+import { platform } from './platform/index.ts';
 
 export const CLAUDE_SETTINGS = join(homedir(), '.claude', 'settings.json');
-export const PLIST_LABEL = 'dev.callmeclaude.hub';
-export const PLIST_PATH = join(homedir(), 'Library', 'LaunchAgents', `${PLIST_LABEL}.plist`);
 
 const EVENTS: Array<[string, 'short' | 'hold' | 'tool']> = [
   ['SessionStart', 'short'],
@@ -74,41 +71,8 @@ export function hooksInstalled(): boolean {
   return Object.values(s.hooks ?? {}).some((gs: any) => gs.some((g: any) => (g.hooks ?? []).some(isOurs)));
 }
 
-const binPath = () => resolve(dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'cmc.mjs');
-
-/** launchd agent: start at login, restart on crash. */
-export async function installLaunchd() {
-  const node = process.execPath;
-  const path = ['/opt/homebrew/bin', '/usr/local/bin', '/usr/bin', '/bin', '/usr/sbin', '/sbin', join(homedir(), '.local/bin'), dirname(node)].join(':');
-  const plist = `<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0"><dict>
-  <key>Label</key><string>${PLIST_LABEL}</string>
-  <key>ProgramArguments</key><array><string>${node}</string><string>${binPath()}</string><string>serve</string></array>
-  <key>RunAtLoad</key><true/>
-  <key>KeepAlive</key><true/>
-  <key>ThrottleInterval</key><integer>10</integer>
-  <key>ProcessType</key><string>Interactive</string>
-  <key>EnvironmentVariables</key><dict>
-    <key>PATH</key><string>${path}</string>
-    <key>HOME</key><string>${homedir()}</string>
-    <key>NODE_NO_WARNINGS</key><string>1</string>
-  </dict>
-  <key>StandardOutPath</key><string>${join(LOG_DIR, 'launchd.out.log')}</string>
-  <key>StandardErrorPath</key><string>${join(LOG_DIR, 'launchd.err.log')}</string>
-</dict></plist>
-`;
-  mkdirSync(dirname(PLIST_PATH), { recursive: true });
-  await execFileP('launchctl', ['bootout', `gui/${process.getuid!()}/${PLIST_LABEL}`]).catch(() => {});
-  writeFileSync(PLIST_PATH, plist);
-  await execFileP('launchctl', ['bootstrap', `gui/${process.getuid!()}`, PLIST_PATH]);
-}
-
-export async function uninstallLaunchd() {
-  await execFileP('launchctl', ['bootout', `gui/${process.getuid!()}/${PLIST_LABEL}`]).catch(() => {});
-  if (existsSync(PLIST_PATH)) unlinkSync(PLIST_PATH);
-}
-
-export async function restartLaunchd() {
-  await execFileP('launchctl', ['kickstart', '-k', `gui/${process.getuid!()}/${PLIST_LABEL}`]);
-}
+/** Background service (launchd agent on macOS, systemd --user unit on Linux): start at login, restart on crash. */
+export const SERVICE = platform.service;
+export const installService = () => platform.service.install();
+export const uninstallService = () => platform.service.uninstall();
+export const restartService = () => platform.service.restart();

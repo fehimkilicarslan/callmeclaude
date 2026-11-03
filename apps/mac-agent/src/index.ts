@@ -9,7 +9,8 @@ import type { PairingInfo } from '@callmeclaude/protocol';
 import { PROTOCOL_VERSION } from '@callmeclaude/protocol';
 import { CONFIG_PATH, LOG_DIR, loadConfig, saveConfig, type Mode } from './config.ts';
 import { getSecret, setSecret } from './secrets.ts';
-import { hooksInstalled, installHooks, installLaunchd, restartLaunchd, uninstallHooks, uninstallLaunchd, PLIST_PATH } from './install.ts';
+import { hooksInstalled, installHooks, installService, restartService, uninstallHooks, uninstallService, SERVICE } from './install.ts';
+import { platform, SecretStoreError } from './platform/index.ts';
 import { execFileP } from './util.ts';
 import { apnsConfigured } from './apns.ts';
 
@@ -45,9 +46,9 @@ async function api(path: string, body?: object) {
   return r.json() as Promise<any>;
 }
 
-/** Restart the launchd service and wait until the hub answers. */
+/** Restart the background service (launchd / systemd --user) and wait until the hub answers. */
 async function restartAndWait() {
-  await restartLaunchd();
+  await restartService();
   const cfg = loadConfig();
   for (let i = 0; i < 40; i++) {
     try {
@@ -58,8 +59,19 @@ async function restartAndWait() {
   return false;
 }
 
+/** Store a secret; if the OS secret store is unavailable (Linux without libsecret), explain instead of crashing. */
+function storeSecret(fn: () => void) {
+  try {
+    fn();
+  } catch (e) {
+    if (!(e instanceof SecretStoreError)) throw e;
+    console.log(`❌ ${e.message}`);
+    process.exitCode = 1;
+  }
+}
+
 async function tailscaleInfo(): Promise<{ ip?: string; dns?: string }> {
-  for (const bin of ['tailscale', '/Applications/Tailscale.app/Contents/MacOS/Tailscale']) {
+  for (const bin of platform.tailscaleBins) {
     try {
       const { stdout } = await execFileP(bin, ['status', '--json'], { timeout: 4000 });
       const j = JSON.parse(stdout);
@@ -72,7 +84,7 @@ async function tailscaleInfo(): Promise<{ ip?: string; dns?: string }> {
 function lanIps() {
   const out: string[] = [];
   for (const [name, addrs] of Object.entries(networkInterfaces())) {
-    for (const a of addrs ?? []) if (a.family === 'IPv4' && !a.internal && !name.startsWith('utun') && !a.address.startsWith('100.')) out.push(a.address);
+    for (const a of addrs ?? []) if (a.family === 'IPv4' && !a.internal && platform.isLanInterface(name) && !a.address.startsWith('100.')) out.push(a.address);
   }
   return out;
 }
@@ -87,8 +99,8 @@ async function main() {
 
     case 'setup': {
       const cfg = loadConfig();
-      if (typeof flags['gemini-key'] === 'string') setSecret('gemini-api-key', flags['gemini-key']);
-      if (typeof flags['apns-key-file'] === 'string') setSecret('apns-p8', readFileSync(flags['apns-key-file'], 'utf8'));
+      if (typeof flags['gemini-key'] === 'string') storeSecret(() => setSecret('gemini-api-key', flags['gemini-key'] as string));
+      if (typeof flags['apns-key-file'] === 'string') storeSecret(() => setSecret('apns-p8', readFileSync(flags['apns-key-file'] as string, 'utf8')));
       if (typeof flags['apns-key-id'] === 'string') cfg.apns.keyId = flags['apns-key-id'];
       if (typeof flags['team-id'] === 'string') cfg.apns.teamId = flags['team-id'];
       if (typeof flags['bundle-id'] === 'string') cfg.apns.bundleId = flags['bundle-id'];
@@ -102,8 +114,8 @@ async function main() {
         console.log('✅ Claude Code hooks merged into ~/.claude/settings.json (backup saved).');
       }
       if (!flags['no-service']) {
-        await installLaunchd();
-        console.log(`✅ launchd service installed: ${PLIST_PATH}`);
+        await installService();
+        console.log(`✅ ${SERVICE.displayName} service installed: ${SERVICE.definitionPath}`);
       }
       if (!getSecret('gemini-api-key')) console.log('⚠️  No Gemini API key: cmc setup --gemini-key <KEY>  (https://aistudio.google.com/apikey)');
       if (!apnsConfigured(cfg)) console.log('⚠️  APNs not configured (the hub can only ring the phone while the app is open): cmc setup --apns-key-file AuthKey_XXX.p8 --apns-key-id XXX --team-id XXX --bundle-id XXX');
@@ -131,7 +143,7 @@ async function main() {
       qrcode.generate(text, { small: true });
       const png = join(CONFIG_PATH, '..', 'pair.png');
       await QR.toFile(png, text, { width: 640, margin: 2 });
-      if (!flags['no-open']) spawnSync('open', [png]);
+      if (!flags['no-open']) platform.openFile(png);
       console.log('\nIn the CallMeClaude app tap "Pair Mac" and scan this QR code. To enter it manually:\n');
       console.log(text);
       if (!ts.ip) console.log('\n⚠️  Tailscale is not connected: to reach this Mac on the road, log in to Tailscale on the Mac and the phone, then run `cmc pair` again.');
@@ -220,14 +232,14 @@ async function main() {
 
     case 'uninstall':
       uninstallHooks();
-      await uninstallLaunchd();
+      await uninstallService();
       return console.log(`Hooks and service removed. Your data is still in ${CONFIG_PATH} (delete it manually if you like).`);
 
     default:
       console.log(`CallMeClaude — cmc <command>
 
   setup [--gemini-key K] [--language en-US] [--apns-key-file F --apns-key-id I --team-id T --bundle-id B]
-                       Install hooks + service, store keys in the Keychain
+                       Install hooks + service, store keys in the ${platform.secrets.displayName}
   pair [--rotate]      Show the QR code for pairing the phone
   status               Sessions and pending decisions
   call-me [--text ..]  Ring the phone now (test)
@@ -277,26 +289,7 @@ async function doctor() {
     return t.ip ? `${t.dns ?? t.ip}` : '!not connected (no access on the road)';
   });
   await check('tmux', async () => (await execFileP('tmux', ['-V'])).stdout.trim());
-  await check('Peekaboo (desktop control)', async () => (await execFileP('/bin/zsh', ['-lc', 'peekaboo --version'])).stdout.trim().split('\n')[0]);
-  await check('cliclick', async () => !!(await execFileP('/bin/zsh', ['-lc', 'command -v cliclick'])).stdout.trim());
-  await check('System sleep disabled (pmset sleep 0)', async () => {
-    const { stdout } = await execFileP('pmset', ['-g']);
-    const m = stdout.match(/^\s*sleep\s+(\d+)/m);
-    return m && m[1] === '0' ? true : `!sleep=${m?.[1]} → sudo pmset -a sleep 0`;
-  });
-  await check('Power on after power loss', async () => {
-    const cap = (await execFileP('pmset', ['-g', 'cap'])).stdout;
-    if (!/autorestart/.test(cap)) return 'laptop: not supported, the battery acts as a UPS (keep it charging)';
-    const { stdout } = await execFileP('pmset', ['-g']);
-    const m = stdout.match(/autorestart\s+(\d)/);
-    return m?.[1] === '1' ? true : '!sudo pmset -a autorestart 1';
-  });
-  await check('No sleep with lid closed', async () => {
-    const isLaptop = /InternalBattery/.test((await execFileP('pmset', ['-g', 'batt'])).stdout);
-    if (!isLaptop) return true;
-    const { stdout } = await execFileP('pmset', ['-g']);
-    return /SleepDisabled\s+1/.test(stdout) ? true : '!keep the lid open, or: sudo pmset -a disablesleep 1';
-  });
+  for (const c of platform.doctorChecks()) await check(c.name, c.fn);
   await check('Mode', async () => cfg.mode);
   await check('Voice language', async () => cfg.language);
 }

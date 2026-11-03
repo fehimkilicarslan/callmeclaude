@@ -2,10 +2,10 @@ import { existsSync } from 'node:fs';
 import type { CanUseTool } from '@anthropic-ai/claude-agent-sdk';
 import type { Hub } from './hub.ts';
 import { runAgent } from './claude.ts';
-import { audit, clip, execFileP, languageName, log, redact } from './util.ts';
+import { platform, securityPatterns } from './platform/index.ts';
+import { audit, clip, languageName, log, redact } from './util.ts';
 
-const PROTECTED = [/\.ssh\//, /Library\/Keychains/, /\.aws\/credentials/, /\.gnupg\//, /\/\.env(\.|$)/, /\.claude\/\.credentials/];
-const DESTRUCTIVE = /(rm\s+-rf?\s+[~\/]|mkfs|diskutil\s+erase|dd\s+if=|:\(\)\s*\{|shutdown|halt\b|security\s+(delete|dump|find-generic-password\s+.*-w)|launchctl\s+unload|csrutil|sudo\s)/i;
+const { PROTECTED, DESTRUCTIVE } = securityPatterns();
 
 function guard(kind: string, extraDeny?: (tool: string, input: any) => string | undefined): CanUseTool {
   return async (tool, input) => {
@@ -29,7 +29,7 @@ let peekabooPath: string | null | undefined;
 async function peekaboo() {
   if (peekabooPath !== undefined) return peekabooPath;
   try {
-    peekabooPath = (await execFileP('/bin/zsh', ['-lc', 'command -v peekaboo'])).stdout.trim() || null;
+    peekabooPath = (await platform.shellExec('command -v peekaboo')).stdout.trim() || null;
   } catch {
     peekabooPath = null;
   }
