@@ -1,0 +1,35 @@
+# dependencies / build
+node_modules/
+dist/
+apps/ios/build/
+apps/ios/*.xcodeproj
+*.xcuserstate
+xcuserdata/
+DerivedData/
+
+# local configuration (never commit)
+apps/ios/Config/Local.xcconfig
+.env
+.env.*
+!.env.example
+
+# secrets / signing material (never commit)
+*.p8
+*.p12
+*.pem
+*.key
+*.cer
+*.mobileprovision
+*.provisionprofile
+AuthKey_*
+credentials/
+
+# runtime data (lives in ~/.callmeclaude, but just in case)
+.callmeclaude/
+*.log
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/
+.claude/

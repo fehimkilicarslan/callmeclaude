@@ -1,0 +1,42 @@
+# Hub ↔ App Protokolü (v1)
+
+- Taşıma: tek WebSocket, `ws://<tailscale-adı|ip|lan-ip>:47801`. Tailscale içinde WireGuard ile şifreli; evde LAN üzerinden token ile.
+- **Metin çerçeveleri:** JSON kontrol mesajları. **İkili çerçeveler:** ses.
+  - App → Hub: PCM16 LE, mono, 16 kHz (mikrofon)
+  - Hub → App: PCM16 LE, mono, 24 kHz (asistan sesi)
+- İlk mesaj `auth` olmalı (5 sn içinde), aksi halde bağlantı `4001/4003` ile kapanır.
+- Tip tanımları: [`packages/protocol/src/index.ts`](../packages/protocol/src/index.ts) · Swift karşılığı: `apps/ios/CallMeClaude/Models.swift`
+
+## App → Hub
+| type | alanlar | |
+|---|---|---|
+| `auth` | `token`, `device`, `v` | Eşleştirmedeki token |
+| `push.register` | `token`, `kind:"voip"` | PushKit token |
+| `call.start` | `direction`, `callId?` | `outbound` = Hub'ın aramasını cevapladım; `inbound` = ben arıyorum |
+| `call.end` | `callId` | Kapat / reddet |
+| `mode.set` | `mode` | desk · away · ride · sleep |
+| `pending.resolve` | `pendingId`, `decision`, `note?` | Ekrandan onay/ret/bırak |
+| `panic` / `resume` / `ping` | | |
+
+## Hub → App
+| type | alanlar | |
+|---|---|---|
+| `hello` | `v`, `snapshot` | Auth başarılı |
+| `snapshot` | `snapshot` | Oturum/karar listesi değişti |
+| `heartbeat` | `ts` | 15 sn'de bir |
+| `call.incoming` | `callId`, `title` | Uygulama açıksa (push'a ek olarak) |
+| `call.ready` / `call.ended` | `callId`, `reason?` | |
+| `audio.flush` | | Kullanıcı araya girdi, kuyruktaki sesi at |
+| `transcript` | `role`, `text`, `final` | Altyazı |
+| `error` | `message` | |
+
+## VoIP push (APNs, `apns-push-type: voip`, topic `<bundle>.voip`)
+```json
+{ "cmc": { "v": 1, "callId": "c_ab12cd", "title": "acme: engel", "priority": "P1" } }
+```
+İçerik minimal; ayrıntı her zaman WebSocket üzerinden çekilir.
+
+## Eşleştirme QR'ı (`cmc pair`)
+```json
+{ "v": 1, "name": "MacBook-Pro", "urls": ["ws://mac.tailnet.ts.net:47801", "ws://100.x.y.z:47801", "ws://192.168.1.20:47801"], "token": "…" }
+```

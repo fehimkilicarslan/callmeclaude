@@ -1,0 +1,15 @@
+{
+  "_comment": "Reference for ~/.callmeclaude/config.json (created by `cmc setup`). Secrets are NOT stored here: they live in the macOS Keychain.",
+  "hookPort": 47800,
+  "appPort": 47801,
+  "mode": "away",
+  "language": "tr-TR",
+  "voice": { "provider": "gemini-live", "model": "gemini-3.8-live", "voiceName": "Puck" },
+  "claude": { "classifyModel": "haiku", "brainModel": "sonnet", "computerModel": "sonnet", "useChrome": true },
+  "apns": { "teamId": "YOUR_TEAM_ID", "keyId": "YOUR_KEY_ID", "bundleId": "com.yourname.callmeclaude", "environment": "development" },
+  "calls": { "batchSeconds": { "P1": 15, "P2": 45 }, "minGapSeconds": 90, "retryMissedAfterSeconds": 180, "maxRetries": 2 },
+  "holdSeconds": 1500,
+  "projectRoots": ["/Users/you/code"],
+  "ignorePaths": [],
+  "autoApprove": { "my-project": ["Bash(npm test", "Edit"] }
+}

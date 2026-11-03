@@ -1,0 +1,43 @@
+name: CallMeClaude
+options:
+  deploymentTarget:
+    iOS: "17.0"
+  developmentLanguage: en
+configFiles:
+  Debug: Config/Local.xcconfig
+  Release: Config/Local.xcconfig
+targets:
+  CallMeClaude:
+    type: application
+    platform: iOS
+    sources:
+      - CallMeClaude
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(CMC_BUNDLE_ID)
+        DEVELOPMENT_TEAM: $(CMC_TEAM_ID)
+        CODE_SIGN_STYLE: Automatic
+        SWIFT_VERSION: "5.0"
+        TARGETED_DEVICE_FAMILY: "1"
+        MARKETING_VERSION: 0.1.0
+        CURRENT_PROJECT_VERSION: 1
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ENABLE_PREVIEWS: NO
+    info:
+      path: CallMeClaude/Info.plist
+      properties:
+        CFBundleDisplayName: CallMeClaude
+        CFBundleDevelopmentRegion: en
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
+        UIBackgroundModes: [voip, audio, remote-notification]
+        NSMicrophoneUsageDescription: The microphone is used to talk with Claude during calls.
+        NSCameraUsageDescription: The camera is used to scan the pairing QR code shown on your Mac.
+        NSLocalNetworkUsageDescription: Used to connect to the CallMeClaude hub on your Mac.
+        NSUserActivityTypes: [INStartCallIntent, INStartAudioCallIntent]
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: true
+    entitlements:
+      path: CallMeClaude/CallMeClaude.entitlements
+      properties:
+        aps-environment: development

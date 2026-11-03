@@ -1,0 +1,32 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  hub:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @callmeclaude/mac-agent typecheck
+      - run: pnpm --filter @callmeclaude/mac-agent test
+
+  ios:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: brew install xcodegen
+      - name: Build (unsigned)
+        working-directory: apps/ios
+        run: |
+          printf 'CMC_TEAM_ID = \nCMC_BUNDLE_ID = dev.callmeclaude.ci\n' > Config/Local.xcconfig
+          xcodegen generate
+          xcodebuild -project CallMeClaude.xcodeproj -scheme CallMeClaude -configuration Debug \
+            -destination 'generic/platform=iOS' CODE_SIGNING_ALLOWED=NO build

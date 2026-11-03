@@ -1,0 +1,354 @@
+import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
+import { readFileSync, existsSync } from 'node:fs';
+import { basename } from 'node:path';
+import { BRAIN_DIR } from './config.ts';
+import type { Hub } from './hub.ts';
+import { classify, quickClassify } from './classifier.ts';
+import type { Pending, Session } from './state.ts';
+import { audit, clip, log, shortId } from './util.ts';
+import type { Risk } from '@callmeclaude/protocol';
+
+type Json = Record<string, any>;
+
+/** Receives Claude Code HTTP hooks on 127.0.0.1. Never blocks a session unless it is deliberately holding it. */
+export function startHookServer(hub: Hub) {
+  const { cfg } = hub;
+  const server = createServer(async (req, res) => {
+    const send = once((body: object) => {
+      if (res.writableEnded || res.destroyed) return;
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify(body));
+    });
+    try {
+      if (req.method === 'GET' && req.url === '/health') return void send({ ok: true });
+      if (req.url?.startsWith('/control/')) {
+        if (req.headers.authorization !== `Bearer ${cfg.hookToken}`) return void res.writeHead(401).end();
+        const body = req.method === 'POST' ? JSON.parse(await readBody(req)) : {};
+        return void send(await control(hub, req.url.slice('/control/'.length), body));
+      }
+      if (req.method !== 'POST' || !req.url?.startsWith('/hooks/')) return void res.writeHead(404).end();
+      if (req.headers.authorization !== `Bearer ${cfg.hookToken}`) return void res.writeHead(401).end();
+      const input = JSON.parse(await readBody(req)) as Json;
+      if (isInternal(input)) return void send({});
+      const event = req.url.slice('/hooks/'.length);
+      const rawPane = String(req.headers['x-cmc-tmux-pane'] ?? '').trim();
+      const pane = /^%\d+$/.test(rawPane) ? rawPane : undefined;
+      await handle(hub, event, input, pane, send, res);
+    } catch (e) {
+      log.error('hook error', e);
+      send({});
+    }
+  });
+  server.requestTimeout = 0;
+  server.headersTimeout = 10_000;
+  server.listen(cfg.hookPort, '127.0.0.1', () => log.info(`hook server on 127.0.0.1:${cfg.hookPort}`));
+  return server;
+}
+
+/** Local control API used by the `cmc` CLI. */
+async function control(hub: Hub, cmd: string, body: Json): Promise<object> {
+  switch (cmd) {
+    case 'status':
+      return { snapshot: hub.st.snapshot(), voiceActive: !!hub.voice.active, ringing: !!hub.calls.ringing, queued: hub.calls.openCount() };
+    case 'call-me': {
+      const r = await hub.calls.ring([{ priority: 'P0', title: body.title ?? 'Claude', text: body.text ?? 'Test call: tell the developer that everything works and give a short status summary.' }], 1);
+      return r;
+    }
+    case 'panic':
+      await hub.controller.panic();
+      return { ok: true };
+    case 'permissions': {
+      // Report macOS privacy permissions as seen from inside the hub service (launchd context).
+      const { execFileP } = await import('./util.ts');
+      const out: Record<string, string> = { node: process.execPath };
+      try {
+        out.peekaboo = (await execFileP('/bin/zsh', ['-lc', 'peekaboo permissions'], { timeout: 15000 })).stdout.trim();
+      } catch (e) {
+        out.peekaboo = 'could not run: ' + (e as Error).message;
+      }
+      try {
+        const sw = await import('node:child_process');
+        // CGPreflightScreenCaptureAccess via a tiny Swift one-liner is heavy; use screencapture + window list instead.
+        const { stdout } = await execFileP('/usr/bin/osascript', ['-e', 'tell application "System Events" to get name of first process whose frontmost is true'], { timeout: 8000 });
+        out.accessibility = 'ok (' + stdout.trim() + ')';
+        void sw;
+      } catch (e) {
+        out.accessibility = 'YOK: ' + (e as Error).message.split('\n')[0];
+      }
+      return out;
+    }
+    case 'do': {
+      const { computerTask } = await import('./brain.ts');
+      return { result: await computerTask(hub, String(body.task ?? ''), body.project) };
+    }
+    case 'resume':
+      hub.st.paused = false;
+      hub.st.changed();
+      return { ok: true };
+    case 'mode':
+      hub.setMode(body.mode);
+      return { ok: true, mode: body.mode };
+    default:
+      return { error: 'unknown command' };
+  }
+}
+
+function isIgnored(paths: string[], cwd: unknown) {
+  return typeof cwd === 'string' && paths.some((p) => p && (cwd === p || cwd.startsWith(p.endsWith('/') ? p : p + '/')));
+}
+
+function isInternal(input: Json) {
+  return typeof input.cwd === 'string' && input.cwd.startsWith(BRAIN_DIR);
+}
+
+async function handle(hub: Hub, event: string, input: Json, pane: string | undefined, send: (b: object) => void, res: ServerResponse) {
+  const { st } = hub;
+  const sid: string = input.session_id;
+  const watchOnly = isIgnored(hub.cfg.ignorePaths, input.cwd);
+  const base: Partial<Session> = { transcriptPath: input.transcript_path ?? '' };
+  if (pane) base.tmuxPane = pane;
+  if (input.agent_id) return send({}); // subagent-level events: ignore, the main thread reports
+
+  switch (event) {
+    case 'SessionStart': {
+      st.upsertSession(sid, input.cwd, { ...base, state: 'running', summary: 'Session opened.' });
+      audit('hook', { event, sid, cwd: input.cwd, source: input.source });
+      return send({});
+    }
+    case 'UserPromptSubmit': {
+      const s = st.upsertSession(sid, input.cwd, { ...base, state: 'running', lastPrompt: String(input.prompt ?? ''), summary: 'Working.' });
+      return send(withQueued(hub, s, 'UserPromptSubmit'));
+    }
+    case 'PreToolUse':
+    case 'PostToolUse': {
+      const s = st.upsertSession(sid, input.cwd, {
+        ...base,
+        state: 'running',
+        lastToolAt: new Date().toISOString(),
+        openTool: event === 'PreToolUse' ? input.tool_name : undefined,
+      });
+      if (s.summary === 'Session opened.' || s.summary === 'New session started.') s.summary = 'Working.';
+      return send(event === 'PostToolUse' ? withQueued(hub, s, 'PostToolUse') : {});
+    }
+    case 'Notification': {
+      const s = st.upsertSession(sid, input.cwd, base);
+      if (input.notification_type === 'idle_prompt' && s.state === 'running') s.state = 'waiting_input';
+      return send({});
+    }
+    case 'SessionEnd': {
+      const s = st.upsertSession(sid, input.cwd, { ...base, state: 'ended', summary: 'Session closed.' });
+      hub.controller.release(s);
+      return send({});
+    }
+    case 'StopFailure': {
+      const s = st.upsertSession(sid, input.cwd, {
+        ...base,
+        state: 'errored',
+        summary: `Error: ${clip(input.error_details ?? input.error?.type ?? input.error ?? 'API error', 100)}`,
+      });
+      audit('hook', { event, sid, error: input.error });
+      if (!watchOnly) hub.calls.enqueue({ priority: 'P1', title: `${s.project}: error`, text: `The ${s.project} session stopped with an API error: ${s.summary}` });
+      return send({});
+    }
+    case 'Stop':
+      if (watchOnly) {
+        const msg = String(input.last_assistant_message ?? lastAssistantFromTranscript(input.transcript_path) ?? '');
+        const c = quickClassify(msg);
+        st.upsertSession(sid, input.cwd, { ...base, lastMessage: msg, openTool: undefined, state: c.state, summary: c.summary });
+        return send({});
+      }
+      return onStop(hub, input, base, send, res);
+    case 'PermissionRequest':
+      if (watchOnly) {
+        st.upsertSession(sid, input.cwd, { ...base, state: 'waiting_permission', summary: `Waiting for permission: ${describeTool(input.tool_name, input.tool_input)}` });
+        return send({});
+      }
+      return onPermission(hub, input, base, send, res);
+    default:
+      return send({});
+  }
+}
+
+/** Deliver instructions queued while the session was busy, as additional context. */
+function withQueued(hub: Hub, s: Session, eventName: string): object {
+  const q = hub.st.queued.get(s.id);
+  if (!q?.length) return {};
+  hub.st.queued.delete(s.id);
+  hub.st.changed();
+  audit('queue.delivered', { session: s.id, via: eventName, q });
+  return {
+    hookSpecificOutput: {
+      hookEventName: eventName,
+      additionalContext: `The developer gave these instructions by phone (via CallMeClaude): ${q.join(' / ')}`,
+    },
+  };
+}
+
+async function onStop(hub: Hub, input: Json, base: Partial<Session>, send: (b: object) => void, res: ServerResponse) {
+  const { st, cfg } = hub;
+  const lastMessage = String(input.last_assistant_message ?? lastAssistantFromTranscript(input.transcript_path) ?? '');
+  const s = st.upsertSession(input.session_id, input.cwd, { ...base, lastMessage, openTool: undefined });
+
+  const q = st.queued.get(s.id);
+  if (q?.length) {
+    st.queued.delete(s.id);
+    s.state = 'running';
+    st.changed();
+    audit('queue.delivered', { session: s.id, via: 'Stop', q });
+    s.lastPrompt = `Telefondan yeni talimat: ${q.join(' / ')}`;
+    return send({ decision: 'block', reason: `The developer said by phone (via CallMeClaude): ${q.join(' / ')}` });
+  }
+
+  if (st.paused || cfg.mode === 'desk' || cfg.mode === 'sleep') {
+    const c = quickClassify(lastMessage);
+    Object.assign(s, { state: c.state, summary: c.summary });
+    st.changed();
+    if (cfg.mode === 'sleep' || st.paused) return send({});
+    return send({});
+  }
+
+  const c = await classify({ project: s.project, lastMessage, lastPrompt: s.lastPrompt, model: cfg.claude.classifyModel, language: cfg.language });
+  Object.assign(s, { state: c.state, summary: c.summary });
+  st.changed();
+  audit('stop.classified', { session: s.id, project: s.project, ...c });
+
+  const summary = `${c.summary}${c.ask ? ' ' + c.ask : ''}`;
+  const p = hold(hub, s, 'stop', summary, lastMessage, c.risk, send, res);
+  hub.calls.enqueue({
+    priority: c.state === 'done' ? 'P2' : 'P1',
+    title: `${s.project}: ${c.state === 'done' ? 'bitti' : c.state === 'blocked' ? 'engel' : 'soru'}`,
+    text: `[${s.project}] ${summary}`,
+    pendingId: p.id,
+  });
+}
+
+async function onPermission(hub: Hub, input: Json, base: Partial<Session>, send: (b: object) => void, res: ServerResponse) {
+  const { st, cfg } = hub;
+  const s = st.upsertSession(input.session_id, input.cwd, { ...base, state: 'waiting_permission' });
+  const desc = describeTool(input.tool_name, input.tool_input);
+  s.summary = `Waiting for permission: ${desc}`;
+  st.changed();
+
+  const rules = cfg.autoApprove[s.project] ?? [];
+  const sig = toolSignature(input.tool_name, input.tool_input);
+  if (rules.some((r) => sig.startsWith(r))) {
+    audit('permission.auto', { session: s.id, project: s.project, sig });
+    s.state = 'running';
+    s.summary = 'Working.';
+    st.changed();
+    return send({ hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: { behavior: 'allow' } } });
+  }
+  if (st.paused || cfg.mode === 'desk') return send({});
+
+  const p = hold(hub, s, 'permission', `Asks for permission: ${desc}`, JSON.stringify(input.tool_input ?? {}).slice(0, 2000), riskOf(sig), send, res);
+  p.toolName = input.tool_name;
+  p.toolInput = input.tool_input;
+  hub.calls.enqueue({ priority: 'P1', title: `${s.project}: permission`, text: `[${s.project}] Asks for permission: ${desc}`, pendingId: p.id });
+}
+
+function hold(hub: Hub, s: Session, kind: 'stop' | 'permission', summary: string, detail: string, risk: Risk, send: (b: object) => void, res: ServerResponse): Pending {
+  const { st, cfg } = hub;
+  // A session can only be in one hold at a time.
+  const prev = st.holdForSession(s.id);
+  if (prev) hub.controller.release(s);
+  const now = Date.now();
+  const p: Pending = {
+    id: shortId('p_'),
+    sessionId: s.id,
+    project: s.project,
+    kind,
+    summary,
+    detail,
+    risk,
+    createdAt: new Date(now).toISOString(),
+    deadline: new Date(now + cfg.holdSeconds * 1000).toISOString(),
+    status: 'open',
+  };
+  st.pending.set(p.id, p);
+  const timer = setTimeout(() => {
+    st.holds.delete(p.id);
+    if (p.status === 'open') p.status = 'expired';
+    audit('pending.expired', { pendingId: p.id, project: p.project });
+    send({});
+    st.changed();
+  }, cfg.holdSeconds * 1000);
+  st.holds.set(p.id, { pendingId: p.id, sessionId: s.id, kind, respond: send, timer });
+  // The developer may answer at the keyboard (Esc) → Claude Code drops the connection.
+  res.on('close', () => {
+    if (!res.writableEnded && st.holds.has(p.id)) {
+      clearTimeout(timer);
+      st.holds.delete(p.id);
+      p.status = 'resolved';
+      audit('pending.local', { pendingId: p.id });
+      st.changed();
+    }
+  });
+  audit('pending.new', { pendingId: p.id, project: s.project, kind, summary, risk });
+  st.changed();
+  return p;
+}
+
+export function describeTool(name: string, input: any): string {
+  if (!input) return name;
+  switch (name) {
+    case 'Bash':
+      return `run a command: ${clip(input.description || input.command, 90)}`;
+    case 'Edit':
+    case 'Write':
+    case 'MultiEdit':
+    case 'NotebookEdit':
+      return `edit ${basename(String(input.file_path ?? input.notebook_path ?? 'a file'))}`;
+    case 'WebFetch':
+      try {
+        return `read ${new URL(input.url).hostname}`;
+      } catch {
+        return 'read a web page';
+      }
+    default:
+      return name.startsWith('mcp__') ? `use the ${name.split('__').slice(1).join(' ')} tool` : `use the ${name} tool`;
+  }
+}
+
+export function toolSignature(name: string, input: any) {
+  return name === 'Bash' ? `Bash(${String(input?.command ?? '')}` : name;
+}
+
+function riskOf(sig: string): Risk {
+  if (/rm -rf|drop (table|database)|mkfs|--force|reset --hard/i.test(sig)) return 'critical';
+  if (/git push|deploy|publish|vercel|npm publish|kubectl|terraform apply|curl .*-X (POST|DELETE)/i.test(sig)) return 'high';
+  if (/^Bash\(/.test(sig)) return 'medium';
+  return 'low';
+}
+
+function lastAssistantFromTranscript(path?: string): string | undefined {
+  if (!path || !existsSync(path)) return;
+  try {
+    const lines = readFileSync(path, 'utf8').trimEnd().split('\n').slice(-60).reverse();
+    for (const l of lines) {
+      const j = JSON.parse(l);
+      if (j.type === 'assistant') {
+        const t = (j.message?.content ?? []).filter((b: any) => b.type === 'text').map((b: any) => b.text).join('\n');
+        if (t) return t;
+      }
+    }
+  } catch {}
+}
+
+function readBody(req: IncomingMessage): Promise<string> {
+  return new Promise((resolve, reject) => {
+    let d = '';
+    req.setEncoding('utf8');
+    req.on('data', (c) => (d += c));
+    req.on('end', () => resolve(d || '{}'));
+    req.on('error', reject);
+  });
+}
+
+function once<T extends (...a: any[]) => void>(f: T): T {
+  let done = false;
+  return ((...a: any[]) => {
+    if (done) return;
+    done = true;
+    f(...a);
+  }) as T;
+}

@@ -1,0 +1,3 @@
+// Copy to Local.xcconfig and fill in your own Apple team + a unique bundle id.
+CMC_TEAM_ID = XXXXXXXXXX
+CMC_BUNDLE_ID = com.example.callmeclaude

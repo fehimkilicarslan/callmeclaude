@@ -1,0 +1,217 @@
+import { test, before, after } from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtempSync, writeFileSync, mkdirSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import WebSocket from 'ws';
+
+// Isolated hub home + ports so tests never touch the real installation.
+const home = mkdtempSync(join(process.env.CMC_TEST_TMP ?? tmpdir(), 'cmc-test-'));
+process.env.CMC_HOME = home;
+mkdirSync(home, { recursive: true });
+const HOOK = 47950;
+const APP = 47951;
+writeFileSync(
+  join(home, 'config.json'),
+  JSON.stringify({ hookPort: HOOK, appPort: APP, hookToken: 'hooktok', appToken: 'apptok', mode: 'away', holdSeconds: 20, calls: { batchSeconds: { P1: 0, P2: 0 }, minGapSeconds: 0 } }),
+);
+// Skip the real Claude classifier in tests unless explicitly requested.
+if (!process.env.CMC_TEST_LIVE) process.env.CMC_CLASSIFY_OFFLINE = '1';
+
+let hub: any;
+before(async () => {
+  const { Hub } = await import('../src/hub.ts');
+  hub = new Hub();
+  hub.start();
+  await new Promise((r) => setTimeout(r, 300));
+});
+after(() => setTimeout(() => process.exit(0), 50));
+
+const hook = (event: string, body: object, headers: Record<string, string> = {}) =>
+  fetch(`http://127.0.0.1:${HOOK}/hooks/${event}`, {
+    method: 'POST',
+    headers: { authorization: 'Bearer hooktok', 'content-type': 'application/json', ...headers },
+    body: JSON.stringify(body),
+  }).then((r) => r.json());
+
+function phone(): Promise<{ ws: WebSocket; msgs: any[]; next: (type: string) => Promise<any> }> {
+  return new Promise((resolve) => {
+    const ws = new WebSocket(`ws://127.0.0.1:${APP}`);
+    const msgs: any[] = [];
+    const waiters: Array<[string, (m: any) => void]> = [];
+    ws.on('message', (d, bin) => {
+      if (bin) return;
+      const m = JSON.parse(d.toString());
+      msgs.push(m);
+      const i = waiters.findIndex(([t]) => t === m.type);
+      if (i >= 0) waiters.splice(i, 1)[0][1](m);
+    });
+    ws.on('open', () => {
+      ws.send(JSON.stringify({ type: 'auth', token: 'apptok', device: 'test-phone', v: 1 }));
+      resolve({
+        ws,
+        msgs,
+        next: (type) =>
+          new Promise((res) => {
+            const found = msgs.find((m) => m.type === type && !m.__seen);
+            if (found) {
+              found.__seen = true;
+              return res(found);
+            }
+            waiters.push([type, res]);
+          }),
+      });
+    });
+  });
+}
+
+test('rejects hooks without token', async () => {
+  const r = await fetch(`http://127.0.0.1:${HOOK}/hooks/Stop`, { method: 'POST', body: '{}' });
+  assert.equal(r.status, 401);
+});
+
+test('phone with bad token is rejected', async () => {
+  const code = await new Promise<number>((res) => {
+    const ws = new WebSocket(`ws://127.0.0.1:${APP}`);
+    ws.on('open', () => ws.send(JSON.stringify({ type: 'auth', token: 'nope', device: 'x', v: 1 })));
+    ws.on('close', (c) => res(c));
+  });
+  assert.equal(code, 4003);
+});
+
+test('session lifecycle + blocked stop is held, phone rings, instruction continues the agent', async () => {
+  const p = await phone();
+  const hello = await p.next('hello');
+  assert.equal(hello.snapshot.mode, 'away');
+
+  await hook('SessionStart', { session_id: 's1', cwd: '/tmp/acme-web', transcript_path: '', source: 'startup' }, { 'x-cmc-tmux-pane': '$TMUX_PANE' });
+  await hook('UserPromptSubmit', { session_id: 's1', cwd: '/tmp/acme-web', prompt: 'Başvuru formunu doldur ve gönder' });
+  assert.equal(hub.st.sessions.get('s1').state, 'running');
+  assert.equal(hub.st.sessions.get('s1').tmuxPane, undefined, 'literal $TMUX_PANE must be ignored');
+
+  // The Stop hook is held open until the developer answers.
+  const held = hook('Stop', {
+    session_id: 's1',
+    cwd: '/tmp/acme-web',
+    stop_hook_active: false,
+    last_assistant_message: "I filled in the form, but I can't submit it without your approval. Should I submit it?",
+  });
+  const ring = await p.next('call.incoming');
+  assert.match(ring.title, /acme-web/);
+  assert.equal(hub.st.openPending().length, 1);
+  assert.equal(hub.st.sessions.get('s1').state, 'blocked');
+
+  const s = hub.st.findSession('Acme Web');
+  assert.ok(s, 'fuzzy project lookup');
+  const via = await hub.controller.instruct(s, 'Gönder, tam yetkilisin.');
+  assert.equal(via, 'hold');
+  const reply: any = await held;
+  assert.equal(reply.decision, 'block');
+  assert.match(reply.reason, /Gönder, tam yetkilisin/);
+  assert.equal(hub.st.openPending().length, 0);
+  hub.calls.takeAgenda();
+});
+
+test('permission request: auto-approve rule, then held + approved', async () => {
+  hub.cfg.autoApprove['api'] = ['Bash(npm test'];
+  const auto: any = await hook('PermissionRequest', { session_id: 's2', cwd: '/x/api', tool_name: 'Bash', tool_input: { command: 'npm test -- --watch=false' } });
+  assert.equal(auto.hookSpecificOutput.decision.behavior, 'allow');
+
+  const held = hook('PermissionRequest', { session_id: 's2', cwd: '/x/api', tool_name: 'Bash', tool_input: { command: 'git push origin main' } });
+  await new Promise((r) => setTimeout(r, 100));
+  const pend = hub.st.openPending()[0];
+  assert.equal(pend.risk, 'high');
+  assert.ok(hub.controller.permission(hub.st.sessions.get('s2'), true));
+  const r: any = await held;
+  assert.equal(r.hookSpecificOutput.decision.behavior, 'allow');
+  hub.calls.takeAgenda();
+});
+
+test('instruction for a busy session is queued and delivered on next tool event', async () => {
+  await hook('PreToolUse', { session_id: 's3', cwd: '/x/blog', tool_name: 'Bash', tool_input: {} });
+  const s = hub.st.sessions.get('s3');
+  assert.equal(await hub.controller.instruct(s, 'README linklerini de düzelt'), 'queue');
+  const r: any = await hook('PostToolUse', { session_id: 's3', cwd: '/x/blog', tool_name: 'Bash', tool_input: {}, tool_response: {} });
+  assert.match(r.hookSpecificOutput.additionalContext, /README linklerini/);
+  assert.equal(hub.st.queued.has('s3'), false);
+});
+
+test('desk mode never holds', async () => {
+  hub.cfg.mode = 'desk';
+  const t = Date.now();
+  const r = await hook('Stop', { session_id: 's4', cwd: '/x/desk', stop_hook_active: false, last_assistant_message: 'Should I continue?' });
+  assert.deepEqual(r, {});
+  assert.ok(Date.now() - t < 1000);
+  assert.equal(hub.st.sessions.get('s4').state, 'waiting_input');
+  hub.cfg.mode = 'away';
+});
+
+test('hold expires and releases the session', async () => {
+  hub.cfg.holdSeconds = 1;
+  const r = await hook('Stop', { session_id: 's5', cwd: '/x/exp', stop_hook_active: false, last_assistant_message: 'Done. All tests pass.' });
+  assert.deepEqual(r, {});
+  hub.cfg.holdSeconds = 20;
+  hub.calls.takeAgenda();
+});
+
+test('panic interrupts held sessions and pauses', async () => {
+  const held = hook('Stop', { session_id: 's6', cwd: '/x/p', stop_hook_active: false, last_assistant_message: 'Shall I deploy?' });
+  await new Promise((r) => setTimeout(r, 100));
+  await hub.controller.panic();
+  const r: any = await held;
+  assert.equal(r.continue, false);
+  assert.equal(hub.st.paused, true);
+  const r2 = await hook('Stop', { session_id: 's6', cwd: '/x/p', stop_hook_active: false, last_assistant_message: 'Shall I deploy?' });
+  assert.deepEqual(r2, {}, 'paused hub never holds');
+  hub.st.paused = false;
+});
+
+test('watch-only folders are tracked and reported but never held', async () => {
+  hub.cfg.ignorePaths = ['/x/private'];
+  const r = await hook('Stop', { session_id: 's7', cwd: '/x/private/app', stop_hook_active: false, last_assistant_message: 'Should I deploy?' });
+  assert.deepEqual(r, {});
+  assert.equal(hub.st.sessions.get('s7').state, 'waiting_input');
+  assert.equal(hub.st.openPending().filter((p: any) => p.sessionId === 's7').length, 0);
+  assert.ok(hub.st.findSession('app'), 'visible to the voice agent');
+  hub.cfg.ignorePaths = [];
+});
+
+test('phone instruction becomes the latest prompt for the classifier', async () => {
+  await hook('SessionStart', { session_id: 's8', cwd: '/x/lp', source: 'startup' });
+  const held = hook('Stop', { session_id: 's8', cwd: '/x/lp', stop_hook_active: false, last_assistant_message: 'Shall I also add tests?' });
+  await new Promise((r) => setTimeout(r, 100));
+  await hub.controller.instruct(hub.st.sessions.get('s8'), 'Evet, testleri de ekle');
+  await held;
+  assert.match(hub.st.sessions.get('s8').lastPrompt, /New instruction by phone: Evet, testleri de ekle/);
+  hub.calls.takeAgenda();
+});
+
+test('call survives a phone reconnect: same callId re-attaches, late close of old socket is ignored', async () => {
+  // Stub the voice layer: no Gemini in tests.
+  const { VoiceCall } = await import('../src/voice/call.ts');
+  const realStart = VoiceCall.prototype.start;
+  VoiceCall.prototype.start = async function () {};
+  try {
+    const a = await phone();
+    await a.next('hello');
+    a.ws.send(JSON.stringify({ type: 'call.start', callId: 'c_test1', direction: 'inbound' }));
+    await a.next('call.ready');
+    assert.equal(hub.voice.active.callId, 'c_test1');
+
+    const b = await phone();
+    await b.next('hello');
+    b.ws.send(JSON.stringify({ type: 'call.start', callId: 'c_test1', direction: 'inbound' }));
+    await b.next('call.ready');
+    a.ws.close(); // old socket closes late
+    await new Promise((r) => setTimeout(r, 150));
+    assert.equal(hub.voice.active?.callId, 'c_test1', 'call still alive');
+    assert.equal(hub.voice.active.sinkId !== undefined, true);
+
+    b.ws.send(JSON.stringify({ type: 'call.end', callId: 'c_test1' }));
+    await new Promise((r) => setTimeout(r, 150));
+    assert.equal(hub.voice.active, undefined);
+    b.ws.close();
+  } finally {
+    VoiceCall.prototype.start = realStart;
+  }
+});

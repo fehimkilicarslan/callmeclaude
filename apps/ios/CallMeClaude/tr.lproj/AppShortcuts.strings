@@ -1,0 +1,4 @@
+/* Turkish Siri phrases for the "Call Claude" shortcut (the app UI itself is English). */
+"Call ${applicationName}" = "${applicationName} ara";
+"Talk to ${applicationName}" = "${applicationName} ile konuş";
+"Start a ${applicationName} call" = "${applicationName} araması başlat";

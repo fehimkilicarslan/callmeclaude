@@ -1,0 +1,213 @@
+import { EventEmitter } from 'node:events';
+import { existsSync, readFileSync } from 'node:fs';
+import { basename, dirname, join } from 'node:path';
+import type { PendingCard, SessionCard, SessionState, Snapshot, Risk } from '@callmeclaude/protocol';
+import { STATE_PATH, writeAtomic, type Mode } from './config.ts';
+import { log } from './util.ts';
+
+export const HUB_VERSION = '0.1.0';
+
+export interface Session {
+  id: string;
+  project: string;
+  cwd: string;
+  state: SessionState;
+  summary: string;
+  lastMessage: string;
+  lastPrompt: string;
+  transcriptPath: string;
+  tmuxPane?: string;
+  startedAt: string;
+  updatedAt: string;
+  lastToolAt?: string;
+  openTool?: string;
+}
+
+export interface Pending {
+  id: string;
+  sessionId: string;
+  project: string;
+  kind: 'permission' | 'stop';
+  summary: string;
+  detail: string;
+  risk: Risk;
+  createdAt: string;
+  deadline: string;
+  status: 'open' | 'resolved' | 'expired';
+  toolName?: string;
+  toolInput?: unknown;
+  announced?: boolean;
+}
+
+/** An HTTP hook request we are holding open, waiting for the developer. */
+export interface Hold {
+  pendingId: string;
+  sessionId: string;
+  kind: 'permission' | 'stop';
+  respond: (body: object) => void;
+  timer: NodeJS.Timeout;
+}
+
+const nameCache = new Map<string, string>();
+
+/** Project name = the git repository root's folder name (so sub-folders map to their project). */
+export function projectName(cwd: string) {
+  if (!cwd) return '?';
+  const hit = nameCache.get(cwd);
+  if (hit) return hit;
+  let dir = cwd;
+  let name = basename(cwd) || cwd;
+  for (let i = 0; i < 12 && dir && dir !== '/'; i++) {
+    if (existsSync(join(dir, '.git'))) {
+      name = basename(dir);
+      break;
+    }
+    dir = dirname(dir);
+  }
+  nameCache.set(cwd, name);
+  return name;
+}
+
+export class State extends EventEmitter {
+  sessions = new Map<string, Session>();
+  pending = new Map<string, Pending>();
+  holds = new Map<string, Hold>(); // by pendingId
+  /** Instructions waiting for a session's next hook event. */
+  queued = new Map<string, string[]>();
+  mode: Mode;
+  language = 'en-US';
+  paused = false;
+  private saveTimer?: NodeJS.Timeout;
+
+  constructor(mode: Mode) {
+    super();
+    this.mode = mode;
+    this.load();
+  }
+
+  private load() {
+    if (!existsSync(STATE_PATH)) return;
+    try {
+      const raw = JSON.parse(readFileSync(STATE_PATH, 'utf8'));
+      for (const s of raw.sessions ?? []) this.sessions.set(s.id, { ...s, project: projectName(s.cwd) });
+      for (const [k, v] of Object.entries(raw.queued ?? {})) this.queued.set(k, v as string[]);
+      this.paused = !!raw.paused;
+      // Holds die with the process; their pendings are no longer answerable via hook.
+      for (const p of raw.pending ?? []) if (p.status === 'open') this.pending.set(p.id, { ...p, status: 'expired' });
+    } catch (e) {
+      log.warn('state load failed', e);
+    }
+  }
+
+  changed() {
+    this.emit('changed');
+    clearTimeout(this.saveTimer);
+    this.saveTimer = setTimeout(() => this.save(), 500);
+  }
+
+  save() {
+    const week = Date.now() - 7 * 864e5;
+    const sessions = [...this.sessions.values()].filter((s) => Date.parse(s.updatedAt) > week);
+    const pending = [...this.pending.values()].filter((p) => Date.parse(p.createdAt) > Date.now() - 864e5);
+    writeAtomic(
+      STATE_PATH,
+      JSON.stringify({ sessions, pending, queued: Object.fromEntries(this.queued), paused: this.paused }, null, 1),
+    );
+  }
+
+  upsertSession(id: string, cwd: string, patch: Partial<Session> = {}): Session {
+    const now = new Date().toISOString();
+    let s = this.sessions.get(id);
+    if (!s) {
+      s = {
+        id,
+        cwd,
+        project: projectName(cwd),
+        state: 'running',
+        summary: 'New session started.',
+        lastMessage: '',
+        lastPrompt: '',
+        transcriptPath: '',
+        startedAt: now,
+        updatedAt: now,
+      };
+      this.sessions.set(id, s);
+    }
+    Object.assign(s, patch, { updatedAt: now });
+    if (cwd && !s.cwd) {
+      s.cwd = cwd;
+      s.project = projectName(cwd);
+    }
+    this.changed();
+    return s;
+  }
+
+  activeSessions() {
+    return [...this.sessions.values()]
+      .filter((s) => s.state !== 'ended')
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  }
+
+  openPending() {
+    return [...this.pending.values()]
+      .filter((p) => p.status === 'open')
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  }
+
+  holdForSession(sessionId: string): Hold | undefined {
+    for (const h of this.holds.values()) if (h.sessionId === sessionId) return h;
+  }
+
+  /** Fuzzy lookup by project name, session id prefix or cwd fragment. */
+  findSession(q: string): Session | undefined {
+    const n = norm(q);
+    const list = this.activeSessions();
+    return (
+      list.find((s) => s.id === q || s.id.startsWith(q)) ??
+      list.find((s) => norm(s.project) === n) ??
+      list.find((s) => norm(s.project).includes(n) || n.includes(norm(s.project))) ??
+      list.find((s) => norm(s.cwd).includes(n))
+    );
+  }
+
+  snapshot(): Snapshot {
+    return {
+      mode: this.mode,
+      language: this.language,
+      paused: this.paused,
+      hubVersion: HUB_VERSION,
+      sessions: this.activeSessions().map(toCard(this)),
+      pending: this.openPending().map(
+        (p): PendingCard => ({
+          id: p.id,
+          sessionId: p.sessionId,
+          project: p.project,
+          kind: p.kind,
+          summary: p.summary,
+          risk: p.risk,
+          createdAt: p.createdAt,
+          deadline: p.deadline,
+        }),
+      ),
+    };
+  }
+}
+
+const toCard =
+  (st: State) =>
+  (s: Session): SessionCard => {
+    const c: SessionCard['controllable'] = [];
+    if (st.holdForSession(s.id)) c.push('hold');
+    if (s.tmuxPane) c.push('tmux');
+    c.push('queue');
+    return { id: s.id, project: s.project, cwd: s.cwd, state: s.state, summary: s.summary, updatedAt: s.updatedAt, controllable: c };
+  };
+
+export function norm(s: string) {
+  return s
+    .toLocaleLowerCase('tr-TR')
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .replace(/ı/g, 'i')
+    .replace(/[^a-z0-9]/g, '');
+}
