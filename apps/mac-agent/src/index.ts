@@ -2,15 +2,17 @@ import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { hostname, networkInterfaces } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { createInterface } from 'node:readline/promises';
 import { randomBytes } from 'node:crypto';
 import qrcode from 'qrcode-terminal';
 import QR from 'qrcode';
 import type { PairingInfo } from '@callmeclaude/protocol';
 import { PROTOCOL_VERSION } from '@callmeclaude/protocol';
-import { CONFIG_PATH, LOG_DIR, loadConfig, saveConfig, type Mode } from './config.ts';
+import { CONFIG_PATH, LOG_DIR, loadConfig, planVoiceSessions, saveConfig, voiceSessionMode, type Mode, type VoiceSessions } from './config.ts';
 import { getSecret, setSecret } from './secrets.ts';
 import { hooksInstalled, installHooks, installService, restartService, uninstallHooks, uninstallService, SERVICE } from './install.ts';
 import { platform, SecretStoreError } from './platform/index.ts';
+import { onPath } from './platform/linux.ts';
 import { execFileP } from './util.ts';
 import { apnsConfigured } from './apns.ts';
 
@@ -70,6 +72,27 @@ function storeSecret(fn: () => void) {
   }
 }
 
+/** Linux `cmc setup`: one question — run voice-started sessions in tmux or headless (`claude -p`)? */
+async function askVoiceSessions(tmuxInstalled: boolean): Promise<VoiceSessions> {
+  console.log('\nSessions you start by voice can run in two ways:');
+  if (tmuxInstalled) {
+    console.log('  1) tmux     — a detached tmux session; watch it with `tmux attach` (default)');
+    console.log('  2) headless — a background `claude -p`; no tmux needed');
+  } else {
+    console.log('  1) headless — a background `claude -p`; no tmux needed (default)');
+    console.log('  2) tmux     — tmux is not installed: install it first (e.g. apt install tmux / dnf install tmux / pacman -S tmux),');
+    console.log('                then you can watch voice-started sessions with `tmux attach`');
+  }
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    const a = (await rl.question('Choice [1]: ')).trim();
+    const second = a === '2';
+    return tmuxInstalled === second ? 'headless' : 'tmux';
+  } finally {
+    rl.close();
+  }
+}
+
 async function tailscaleInfo(): Promise<{ ip?: string; dns?: string }> {
   for (const bin of platform.tailscaleBins) {
     try {
@@ -108,6 +131,17 @@ async function main() {
       if (typeof flags.voice === 'string') cfg.voice.voiceName = flags.voice;
       if (typeof flags.model === 'string') cfg.voice.model = flags.model;
       if (typeof flags.language === 'string') cfg.language = flags.language;
+      const tmuxInstalled = onPath('tmux');
+      let sessions: VoiceSessions | 'ask' | undefined;
+      try {
+        sessions = planVoiceSessions({ os: platform.id, flags, interactive: !!(process.stdin.isTTY && process.stdout.isTTY), tmuxInstalled });
+      } catch (e) {
+        console.log(`❌ ${(e as Error).message}`);
+        process.exitCode = 1;
+        return;
+      }
+      if (sessions === 'ask') sessions = await askVoiceSessions(tmuxInstalled);
+      if (sessions) cfg.voiceSessions = sessions;
       saveConfig(cfg);
       if (!flags['no-hooks']) {
         installHooks(cfg);
@@ -120,6 +154,10 @@ async function main() {
       if (!getSecret('gemini-api-key')) console.log('⚠️  No Gemini API key: cmc setup --gemini-key <KEY>  (https://aistudio.google.com/apikey)');
       if (!apnsConfigured(cfg)) console.log('⚠️  APNs not configured (the hub can only ring the phone while the app is open): cmc setup --apns-key-file AuthKey_XXX.p8 --apns-key-id XXX --team-id XXX --bundle-id XXX');
       console.log(`Voice language: ${cfg.language}  (change with --language, e.g. en-US, tr-TR, de-DE)`);
+      if (sessions) {
+        console.log(`Voice-started sessions: ${sessions}  (change with --tmux / --no-tmux)`);
+        if (sessions === 'tmux' && !tmuxInstalled) console.log('⚠️  tmux is not installed: install it, or run cmc setup --no-tmux');
+      }
       console.log('Next: cmc pair  (scan the QR code with the app)');
       return;
     }
@@ -195,6 +233,11 @@ async function main() {
 
     case 'run': {
       // Start an interactive Claude Code session inside tmux so the hub can type into it.
+      if (platform.id === 'linux' && !onPath('tmux')) {
+        console.log('❌ cmc run needs tmux, which is not installed. Install it (e.g. apt install tmux), or just run `claude` —\n   the hub still watches it, holds it and calls you; only typing into it from the phone needs tmux.');
+        process.exitCode = 1;
+        return;
+      }
       const dir = flags._[0] ?? process.cwd();
       const task = flags._.slice(1).join(' ');
       const name = 'cmc-' + dir.split('/').filter(Boolean).pop()!.replace(/[^a-zA-Z0-9]/g, '').slice(0, 20) + '-' + Date.now().toString(36).slice(-4);
@@ -238,7 +281,9 @@ async function main() {
     default:
       console.log(`CallMeClaude — cmc <command>
 
-  setup [--gemini-key K] [--language en-US] [--apns-key-file F --apns-key-id I --team-id T --bundle-id B]
+  setup [--gemini-key K] [--language en-US] [--apns-key-file F --apns-key-id I --team-id T --bundle-id B]${
+    platform.id === 'linux' ? '\n        [--tmux | --no-tmux]  Run voice-started sessions in tmux or headless (claude -p)' : ''
+  }
                        Install hooks + service, store keys in the ${platform.secrets.displayName}
   pair [--rotate]      Show the QR code for pairing the phone
   status               Sessions and pending decisions
@@ -288,7 +333,8 @@ async function doctor() {
     const t = await tailscaleInfo();
     return t.ip ? `${t.dns ?? t.ip}` : '!not connected (no access on the road)';
   });
-  await check('tmux', async () => (await execFileP('tmux', ['-V'])).stdout.trim());
+  if (platform.id === 'linux' && voiceSessionMode(cfg) === 'headless') await check('tmux', async () => 'optional (disabled)');
+  else await check('tmux', async () => (await execFileP('tmux', ['-V'])).stdout.trim());
   for (const c of platform.doctorChecks()) await check(c.name, c.fn);
   await check('Mode', async () => cfg.mode);
   await check('Voice language', async () => cfg.language);
