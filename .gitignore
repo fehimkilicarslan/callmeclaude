@@ -7,6 +7,15 @@ apps/ios/*.xcodeproj
 xcuserdata/
 DerivedData/
 
+# Android
+.gradle/
+apps/android/build/
+apps/android/app/build/
+apps/android/.kotlin/
+local.properties
+*.apk
+*.aab
+
 # local configuration (never commit)
 apps/ios/Config/Local.xcconfig
 .env
@@ -21,6 +30,8 @@ apps/ios/Config/Local.xcconfig
 *.cer
 *.mobileprovision
 *.provisionprofile
+*.jks
+*.keystore
 AuthKey_*
 credentials/
 

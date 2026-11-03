@@ -43,3 +43,21 @@ jobs:
           xcodegen generate
           xcodebuild -project CallMeClaude.xcodeproj -scheme CallMeClaude -configuration Debug \
             -destination 'generic/platform=iOS' CODE_SIGNING_ALLOWED=NO build
+
+  android:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/android
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+          cache: gradle
+          cache-dependency-path: |
+            apps/android/**/*.gradle.kts
+            apps/android/gradle/libs.versions.toml
+            apps/android/gradle/wrapper/gradle-wrapper.properties
+      - run: ./gradlew assembleDebug test --console=plain
