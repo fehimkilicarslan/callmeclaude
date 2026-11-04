@@ -174,14 +174,15 @@ Commands work on every distribution unless they are labelled **Debian/Ubuntu/Min
 | pnpm | `corepack enable pnpm` (Node 22 and 24 include corepack; with a system-wide Node in `/usr` it needs `sudo`) | same | same |
 | Claude Code, logged in to **your own** Pro/Max plan | https://claude.com/claude-code, then run `claude` once and log in | same | same |
 | git | `sudo apt install git` | `sudo dnf install git` | `sudo pacman -S git` |
-| `secret-tool` and a Secret Service provider (GNOME Keyring or KeePassXC) | `sudo apt install libsecret-tools gnome-keyring` | `sudo dnf install libsecret gnome-keyring` | `sudo pacman -S libsecret gnome-keyring` |
+| `secret-tool` | `sudo apt install libsecret-tools` | `sudo dnf install libsecret` | `sudo pacman -S libsecret` |
+| A Secret Service provider: **KDE Plasma** already has one (KDE Wallet), nothing to add; GNOME and other desktops: GNOME Keyring (or KeePassXC) | `sudo apt install gnome-keyring` | `sudo dnf install gnome-keyring` | `sudo pacman -S gnome-keyring` |
 | tmux (optional) | `sudo apt install tmux` | `sudo dnf install tmux` | `sudo pacman -S tmux` |
-| Computer use, X11 | `sudo apt install scrot xdotool` | `sudo dnf install scrot xdotool` | `sudo pacman -S scrot xdotool` |
-| Computer use, Wayland + KDE | `sudo apt install kde-spectacle` | `sudo dnf install spectacle` | `sudo pacman -S spectacle` |
-| Computer use, Wayland + Sway / Hyprland | `sudo apt install grim` | `sudo dnf install grim` | `sudo pacman -S grim` |
+| Computer use, X11 | `sudo apt install scrot xdotool xclip` | `sudo dnf install scrot xdotool xclip` | `sudo pacman -S scrot xdotool xclip` |
+| Computer use, Wayland + KDE | `sudo apt install kde-spectacle wl-clipboard` | `sudo dnf install spectacle wl-clipboard` | `sudo pacman -S spectacle wl-clipboard` |
+| Computer use, Wayland + Sway / Hyprland | `sudo apt install grim wl-clipboard` | `sudo dnf install grim wl-clipboard` | `sudo pacman -S grim wl-clipboard` |
 | Mouse and keyboard on Wayland (optional) | ydotool 1.x, see [L7](#l7-optional-mouse-and-keyboard-on-wayland-ydotool) | same | same |
 
-On X11, `import` (ImageMagick) or `maim` work instead of `scrot`. GNOME on Wayland has no screenshot tool the hub can use (see [Honest limits](#honest-limits)).
+KDE Wallet provides the Secret Service on KDE Plasma, so `secret-tool` stores the keys there and gnome-keyring is not needed. On X11, `import` (ImageMagick) or `maim` work instead of `scrot`, and `xsel` instead of `xclip`. `xclip` / `wl-clipboard` let the agent type text in any language ([L6](#l6-computer-use-on-linux)). GNOME on Wayland has no screenshot tool the hub can use (see [Honest limits](#honest-limits)).
 
 Check: `node --version && pnpm --version && claude --version && command -v secret-tool`
 
@@ -193,8 +194,12 @@ cd callmeclaude
 pnpm install
 mkdir -p ~/.local/bin
 ln -s "$PWD/apps/mac-agent/bin/cmc.mjs" ~/.local/bin/cmc   # or anywhere on your PATH
-cmc setup --gemini-key <YOUR_KEY> --language en-US
+read -rs -p 'Gemini API key: ' KEY; echo                  # paste the key; it is not shown and not saved in the shell history
+cmc setup --gemini-key "$KEY" --language en-US
+unset KEY
 ```
+
+Typing the key itself on the command line (`cmc setup --gemini-key AIza…`) saves it in your shell history (`~/.bash_history`, `~/.zsh_history`). `read -s` keeps it out of the history; while `cmc setup` runs, the key is still briefly visible in the process list to other users of this computer.
 
 If your shell does not find `cmc`, add `~/.local/bin` to your `PATH`. The service itself always has `~/.local/bin`, `/usr/local/bin`, `/usr/bin`, `/bin` and the directory of the `node` that ran `cmc setup` on its `PATH`.
 
@@ -206,7 +211,14 @@ If your shell does not find `cmc`, add `~/.local/bin` to your `PATH`. The servic
 - Installs a **systemd user service**, `~/.config/systemd/user/dev.callmeclaude.hub.service` (`Restart=always`, logs in `~/.callmeclaude/logs/systemd.*.log`), and starts it with `systemctl --user enable --now`.
 - Says that APNs is not configured. That only matters for an **iPhone**: without APNs it rings only while the app is open. The Android app is not affected.
 
-Check: `systemctl --user status dev.callmeclaude.hub` shows `active (running)`, and `cmc status` lists your Claude Code sessions.
+**Project roots.** Sessions you start by voice ("start a session in callmeclaude") run only inside a folder listed in `projectRoots`: the hub looks for the project there, and refuses folders outside them. When the config is first created, the Linux defaults are the folders that exist among `~/projects`, `~/Desktop/projects`, `~/Desktop/Projects`, `~/Documents/projects`, `~/Documents/Projects`, `~/workspace`, `~/repos`, `~/git`, `~/Projects`, `~/code`, `~/dev`, `~/src`, `~/Developer`, `~/Projeler` and `~/Desktop/Projeler`. `cmc doctor` shows the current list. To change it, edit `projectRoots` in `~/.callmeclaude/config.json` (a config created earlier keeps its saved list), then restart the service:
+
+```bash
+# in ~/.callmeclaude/config.json:  "projectRoots": ["/home/you/projects", "/home/you/work"],
+systemctl --user restart dev.callmeclaude.hub
+```
+
+Check: `systemctl --user status dev.callmeclaude.hub` shows `active (running)`, `cmc status` lists your Claude Code sessions, and `cmc doctor` lists your project roots.
 
 ### L3. Keep the hub running: linger and sleep
 
@@ -222,7 +234,15 @@ sudo mkdir -p /etc/systemd/logind.conf.d
 printf '[Login]\nHandleLidSwitch=ignore\nHandleLidSwitchExternalPower=ignore\n' | sudo tee /etc/systemd/logind.conf.d/callmeclaude-lid.conf
 ```
 
-Masked sleep targets also stop the suspend that your desktop's power settings would start. As on a Mac, a UPS (or a laptop on its charger) and a backup internet connection help on long trips; see [docs/09-unattended-operation.md](docs/09-unattended-operation.md).
+Masked sleep targets also stop the suspend that your desktop's power settings would start. That is the permanent way.
+
+**Just for this trip, without `sudo`:** block sleep only while you are away. Run this in a terminal of your desktop session and leave it open; Ctrl+C (or closing the terminal) ends the block:
+
+```bash
+systemd-inhibit --what=sleep:handle-lid-switch --who=CallMeClaude --why="Away: the hub must answer calls" sleep infinity
+```
+
+`handle-lid-switch` also keeps a laptop awake with the lid closed; drop it if you keep the lid open. On **KDE Plasma** the same is a click: the battery / power icon in the system tray → **Manually block sleep and screen locking**. Both blocks end at the next reboot or logout, so for unattended weeks use the mask commands above. As on a Mac, a UPS (or a laptop on its charger) and a backup internet connection help on long trips; see [docs/09-unattended-operation.md](docs/09-unattended-operation.md).
 
 With linger the hub starts before anyone logs in. Two things wait for a desktop login: the keyring (see [Troubleshooting › Linux](#linux)) and the desktop for computer use (see [L6](#l6-computer-use-on-linux)).
 
@@ -250,6 +270,8 @@ sudo tailscale up
 
 Install Tailscale on the phone, log in with **the same account**, then run `cmc pair` again and re-scan so the QR includes the Tailscale addresses.
 
+Android 17's **Nearby devices / local network** permission does not affect Tailscale: measured with the permission revoked, the app still connected to the hub over mobile data through its Tailscale address. You need that permission only for the LAN addresses at home.
+
 Check: `cmc doctor` shows ✅ Tailscale; turn Wi-Fi off on the phone and call Claude.
 
 ### L6. Computer use on Linux
@@ -265,7 +287,9 @@ When a computer task starts (`cmc do "…"` or "click submit" on a call), the hu
 
 Without a screenshot tool there is no desktop control: the agent must be able to check what it did. With screenshots but no input tool it can only look and report. Screenshots go into a private temporary directory that is deleted when the task ends.
 
-- **Browser:** install the Claude in Chrome extension and run `claude --chrome` once. It works the same on every desktop and is the only path on GNOME Wayland. `cmc doctor` looks for its native host in the Chrome, Chromium, Edge, Brave and Vivaldi profiles under `~/.config`.
+- **Browser:** install the Claude in Chrome extension and run `claude --chrome` once yourself, in a terminal of your desktop. It works the same on every desktop and is the only path on GNOME Wayland. Why once: that first run installs the native messaging host through which the extension talks to Claude Code, and it is where you see the extension connect; the hub's computer tasks start Claude Code with `--chrome` and use the same connection, but they cannot set it up or ask you anything. `cmc doctor` finds the native host file in the Chrome, Chromium, Edge, Brave and Vivaldi profiles under `~/.config`, but it cannot see whether the extension is actually connected; `claude --chrome` (or `/chrome` in it) shows that.
+- **Typing text:** xdotool and ydotool send key codes for a US keyboard, so on other layouts typed text comes out wrong (on Turkish Q, `Merhaba,` became `Merhabaö`). The agent therefore types only through the hub's helper, which pastes the text through the clipboard (`wl-clipboard` on Wayland, `xclip` or `xsel` on X11): it saves what is on the clipboard, pastes, and puts the old text back. If the clipboard held something that is not text (an image, files), that cannot be put back: the clipboard is left empty and the agent says so in its reply. Without a clipboard tool only plain ASCII text can be typed, key by key; the agent refuses other text and says that a clipboard tool is missing (`cmc doctor` prints the install command). Before typing, the agent checks with a screenshot that the right field has the focus and clicks into it first if needed.
+- **Blocked shortcuts:** select-all (Ctrl+A) and cut (Ctrl+X) are refused for the agent, whether sent as `xdotool key ctrl+a` or as ydotool key codes (`29:1 30:1 …`), as is a Ctrl left pressed after a command. To fix a mistake the agent uses only undo (Ctrl+Z). It cannot run `wl-copy`, `wl-paste`, `xclip` or `xsel` itself, so it neither reads nor overwrites your clipboard outside the helper. Refusals are in the audit log (`computer.deny`).
 - **Desktop session:** a hub started at boot (linger) has no `DISPLAY`, `WAYLAND_DISPLAY`, `XDG_SESSION_TYPE`, `XDG_CURRENT_DESKTOP` or `DBUS_SESSION_BUS_ADDRESS`. When a computer task starts without them, the hub reads them from `systemctl --user show-environment`, which most desktops fill at login, and gives them only to that task; nothing needs a restart. `cmc doctor` → "Computer use: hub service sees the desktop" shows what the service will find. If it is ❌ while you are logged in to the desktop, run this in a terminal of that desktop:
   ```bash
   systemctl --user import-environment DISPLAY WAYLAND_DISPLAY XDG_SESSION_TYPE XDG_CURRENT_DESKTOP DBUS_SESSION_BUS_ADDRESS
@@ -297,7 +321,7 @@ systemctl --user enable --now ydotool    # if your package ships this user unit;
 
 To undo: `systemctl --user disable --now ydotool`, `sudo gpasswd -d "$USER" uinput`, then delete `/etc/udev/rules.d/60-callmeclaude-uinput.rules` and `/etc/modules-load.d/uinput.conf`.
 
-On Wayland the pointer may land off target with display scaling or several monitors; the agent checks each move with a screenshot and prefers the keyboard.
+On Wayland the pointer may land off target with display scaling or several monitors; the agent checks each move with a screenshot and prefers the keyboard. Text is not typed with `ydotool type` but pasted through `wl-clipboard` with Ctrl+V sent by ydotool, and your clipboard is put back afterwards ([L6](#l6-computer-use-on-linux)); install `wl-clipboard` with ydotool.
 
 Check: `cmc doctor` → "Computer use: ydotool" says `ready`.
 
@@ -311,7 +335,7 @@ The Android app is the phone side for a macOS **or** a Linux hub. It has no push
 
 1. Build and install: [apps/android/README.md › Build and install](apps/android/README.md#build-and-install) (JDK 17, Android SDK, `adb install -r …`).
 2. Pair: run `cmc pair` on the computer and tap **Scan QR code** in the app.
-3. Allow what the app asks for: microphone, notifications and, on **Android 17**, **Nearby devices / local network** (without it LAN connections silently time out).
+3. Allow what the app asks for: microphone, notifications and, on **Android 17**, **Nearby devices / local network** (without it LAN connections silently time out; Tailscale addresses work without it).
 4. Set battery usage to **Unrestricted** and check your manufacturer's own app killer (Samsung: "Never sleeping apps"). The app's cards tell you what is still missing.
 5. For mobile data, add Tailscale on both sides ([7](#7-reach-your-mac-from-anywhere-tailscale) or [L5](#l5-reach-the-hub-from-anywhere-tailscale)).
 
@@ -337,11 +361,13 @@ Check: lock the phone and run `cmc call-me`.
 |---|---|
 | `cmc status`: hub not running | `systemctl --user status dev.callmeclaude.hub`, `cmc logs`, `~/.callmeclaude/logs/systemd.err.log`, then `cmc restart` |
 | The hub is gone after a reboot until you log in | Linger is off: `sudo loginctl enable-linger "$USER"` ([L3](#l3-keep-the-hub-running-linger-and-sleep)) |
-| `cmc setup`: "secret-tool could not store …", or calls have no voice after a reboot | **The keyring is locked or missing.** The login keyring unlocks when you log in to the desktop with your password; a hub started by linger before that cannot read it. `cmc doctor` runs in your own session, so it may show ✅ while the service can't read the key. Options: log in to the desktop once after each boot (or use automatic login with a keyring that unlocks with it), or give the service the Gemini key directly: `systemctl --user edit dev.callmeclaude.hub.service`, add `[Service]` and `Environment=GEMINI_API_KEY=<YOUR_KEY>`, then `cmc restart`. That override file is plain text under `~/.config/systemd/user/`, readable by your user. The APNs key (iPhone only) has no such alternative. |
+| `cmc setup`: "secret-tool could not store …", or after a reboot a call ends with "The voice key is in the keyring, which is locked …" (or "… the keyring is not running yet") | **The keyring is locked or missing.** The login keyring unlocks when you log in to the desktop with your password; a hub started by linger before that cannot read it. `cmc doctor` runs in your own session, so it may show ✅ while the service can't read the key. Options: log in to the desktop once after each boot (or use automatic login with a keyring that unlocks with it), or give the service the Gemini key directly: `systemctl --user edit dev.callmeclaude.hub.service`, add `[Service]` and `Environment=GEMINI_API_KEY=<YOUR_KEY>`, then `cmc restart`. That override file is plain text under `~/.config/systemd/user/`, readable by your user. The APNs key (iPhone only) has no such alternative. |
 | Sessions the hub starts can't `git push` over SSH ("Could not open a connection to your authentication agent", or asks for a passphrase) | **The service doesn't see your SSH agent:** `SSH_AUTH_SOCK` is not in the systemd user environment, so headless and voice-started tmux sessions don't get it. After logging in: `systemctl --user import-environment SSH_AUTH_SOCK && cmc restart` (the socket can change at every login). If your agent has a fixed socket (for example one started by a systemd user unit), put it in the service instead: `systemctl --user edit dev.callmeclaude.hub.service` → `[Service]` / `Environment=SSH_AUTH_SOCK=<socket path>`, then `cmc restart`. A tmux server that was already running keeps its own environment. |
 | Computer use: "not supported in this environment", or doctor ❌ "hub service sees the desktop" | **The desktop session is not visible.** Log in to the desktop; the hub reads it from systemd when the task starts. If doctor still shows ❌: run `systemctl --user import-environment DISPLAY WAYLAND_DISPLAY XDG_SESSION_TYPE XDG_CURRENT_DESKTOP DBUS_SESSION_BUS_ADDRESS` in a terminal of that desktop (no restart needed). On GNOME Wayland only the browser works. |
 | Computer use can look but not click | No input tool: `xdotool` on X11; on Wayland ydotool 1.x ([L7](#l7-optional-mouse-and-keyboard-on-wayland-ydotool)). `cmc doctor` lists what is missing. |
 | `cmc doctor`: "ydotool 1.x required" | Your ydotool is 0.1.x (Ubuntu 22.04, Mint 21) and is ignored. Install 1.x ([L7](#l7-optional-mouse-and-keyboard-on-wayland-ydotool)). |
+| A voice-started session: "Project folder not found" | The folder is not under a project root. `cmc doctor` lists them; add yours to `projectRoots` ([L2](#l2-install-the-hub)). |
+| Computer use typed the wrong characters, or says a clipboard tool is missing | Install `wl-clipboard` (Wayland) or `xclip` (X11) ([L6](#l6-computer-use-on-linux)). |
 | `cmc run`: "needs tmux" | Install tmux, or start `claude` yourself; the hub still watches it and calls you. Voice-started sessions follow the setup choice (`cmc setup --tmux` / `--no-tmux`). |
 
 ### Android
@@ -357,6 +383,7 @@ Check: lock the phone and run `cmc call-me`.
 
 - **GNOME on Wayland: no screenshots, so no desktop control.** GNOME Shell lets only its own components call its screenshot API, and the screenshot portal asks the person at the screen. The hub uses only the browser path (Claude in Chrome) there. An X11 session of GNOME works with the X11 tools. Details: [ADR-0008](docs/adr/0008-linux-computer-use.md).
 - **ydotool is optional and has a security cost.** Write access to `/dev/uinput` lets every program running under your user create synthetic keyboard and mouse input. CallMeClaude never sets it up; you decide ([L7](#l7-optional-mouse-and-keyboard-on-wayland-ydotool)). On Wayland the pointer is not calibrated: with scaling or several monitors it may land off target, so the agent checks each move with a screenshot. Only ydotool 1.x is supported.
+- **Linux computer use types through the clipboard.** Your clipboard text is put back after each paste; non-text content (an image, copied files) cannot be, so it is cleared and the agent tells you. With `xsel` instead of `xclip`, non-text content cannot even be seen and is treated as empty.
 - **Headless Linux: the keyring may be locked.** Without a desktop login the hub may not read its keys. The Gemini key can come from the service environment instead ([Troubleshooting › Linux](#linux)); the APNs key cannot.
 - **Android has no push (no FCM).** The app keeps a permanent connection to the hub. If Android or the manufacturer stops the app, or the phone has no network, the hub can't ring it, and the app can't notice from the inside. Battery settings matter; a reboot needs one unlock. See [apps/android/README.md › Known limits](apps/android/README.md#known-limits).
 - **Some smartwatches pull the call audio to themselves** because they register as a phone headset.

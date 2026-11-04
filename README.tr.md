@@ -86,6 +86,7 @@ Her telefon her hub'la çalışır: Android uygulaması macOS hub'ıyla da, iPho
 | Bilgisayar kullanımı: tarayıcı (Claude in Chrome) | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Bilgisayar kullanımı: ekran görüntüsü | ✅ Peekaboo / `screencapture` | ✅ `scrot`, `import` ya da `maim` | ✅ `spectacle` | ✅ `grim` | ❌ desteklenmiyor |
 | Bilgisayar kullanımı: fare ve klavye | ✅ Peekaboo / `cliclick` | ✅ `xdotool` | ⚙️ `ydotool` 1.x, isteğe bağlı | ⚙️ `ydotool` 1.x, isteğe bağlı | ❌ (kontrol edecek ekran görüntüsü yok) |
+| Bilgisayar kullanımı: metin yazma (her klavye düzeninde) | ✅ Peekaboo | ✅ `xclip` ya da `xsel` ile yapıştırılır, pano geri konur | ✅ `wl-clipboard` ile yapıştırılır, pano geri konur | ✅ aynı | ❌ |
 | Sesle başlatılan oturumlar | ✅ tmux içinde | ✅ tmux içinde, ya da tmux istemezsen headless (`claude -p`) | ✅ aynı | ✅ aynı | ✅ aynı |
 
 | Telefon | Arka planda çalar mı | Gerekenler |
@@ -107,8 +108,8 @@ Linux ve Android'de bunların yerine:
 
 | | |
 |---|---|
-| Linux | Node 22.5+, pnpm, kilidi açık bir keyring ile `secret-tool` (libsecret); isteğe bağlı: tmux, masaüstün için bilgisayar kullanımı araçları |
-| Android | Android 10+; APK'yı derlemek için JDK 17 ve Android SDK |
+| Linux | Node 22.5+, pnpm, kilidi açık bir keyring ile `secret-tool` (libsecret) (KDE Plasma'da bunu KDE Wallet sağlar; diğerlerinde GNOME Keyring); isteğe bağlı: tmux, masaüstün için bilgisayar kullanımı araçları, yazı yazmak için `wl-clipboard` (Wayland) ya da `xclip` (X11) dahil |
+| Android | Android 10+; APK'yı derlemek için JDK 17 ve Android SDK. Android 17'de yerel ağ izni yalnızca LAN adresleri için gerekir; Tailscale onsuz da çalışır |
 
 ## Hızlı başlangıç
 
@@ -132,11 +133,15 @@ git clone https://github.com/wutlu/callmeclaude && cd callmeclaude
 pnpm install
 mkdir -p ~/.local/bin && ln -s "$PWD/apps/mac-agent/bin/cmc.mjs" ~/.local/bin/cmc
 
-cmc setup --gemini-key <GEMINI_ANAHTARI> --language tr-TR   # hook'lar + systemd --user servisi; tmux'u sorar; anahtar → keyring
-cmc doctor                                                  # linger, uyku ve bilgisayar kullanımı önerileri
+read -rs -p 'Gemini API anahtarı: ' KEY; echo              # anahtarı kabuk geçmişinin dışında tutar
+cmc setup --gemini-key "$KEY" --language tr-TR              # hook'lar + systemd --user servisi; tmux'u sorar; anahtar → keyring
+unset KEY
+cmc doctor                                                  # linger, uyku, proje kökleri ve bilgisayar kullanımı önerileri
 cmc pair                                                    # QR kodu uygulamada okut
 cmc call-me                                                 # telefonun çalar
 ```
+
+Sesle başlattığın oturumlar yalnızca **proje köklerinin** içinde çalışır (Linux'ta varsayılan olarak `~/projects`, `~/Desktop/projects` ve var olan diğer yaygın klasörler). Değiştirmek için `~/.callmeclaude/config.json`'daki `projectRoots`'u düzenle, sonra `systemctl --user restart dev.callmeclaude.hub`; bkz. [INSTALLATION.md › L2](INSTALLATION.md#l2-install-the-hub). Bir Linux bilgisayarı yalnızca sen uzaktayken, `sudo` olmadan uyanık tutmak için: [INSTALLATION.md › L3](INSTALLATION.md#l3-keep-the-hub-running-linger-and-sleep).
 
 **Android uygulaması:** APK'yı [apps/android/README.md](apps/android/README.md)'deki gibi derleyip kur, sonra `cmc pair` QR kodunu okut. macOS ve Linux hub'ıyla çalışır.
 
@@ -160,6 +165,7 @@ Bu yazılım bilgisayarını sesle yönetebilir. Varsayılanlar temkinlidir:
 
 - Riskli eylemler açık sesli onay ister: ödeme, deploy, `git push`, silme, mesaj gönderme, bilgisayar kullanımı.
 - Yıkıcı kabuk komutları ve hassas yollar (`~/.ssh`, Keychain, `.env`; Linux'ta keyring dosyaları da) hub'ın kendi ajanına kapalıdır.
+- Linux'ta hub'ın ajanı metni yalnızca pano üzerinden yapıştırarak yazar ve sonra panonu geri koyar; hepsini seçme (Ctrl+A) ve kesme (Ctrl+X) ona kapalıdır, hataları yalnızca geri alma (Ctrl+Z) ile düzeltir.
 - Web sayfası içeriği talimat değil, veri sayılır.
 - Her şey `~/.callmeclaude/audit` altındaki yalnızca eklenebilen denetim kaydına yazılır.
 
@@ -169,7 +175,8 @@ Güvenmeden önce [docs/08-security.md](docs/08-security.md) ve [SECURITY.md](SE
 
 - **Wayland'de GNOME:** ekran görüntüsü yok, dolayısıyla masaüstü kontrolü yok; yalnızca tarayıcı yolu (Claude in Chrome) çalışır.
 - **ydotool isteğe bağlıdır ve güvenlik bedeli vardır:** Wayland'de fare ve klavye için `/dev/uinput`'a yazma izni gerekir; o zaman kullanıcı hesabında çalışan her program sentetik giriş üretebilir. Sen kurana kadar kapalıdır ve yalnızca ydotool 1.x kullanılır.
-- **Başsız Linux:** masaüstü girişi olmadan keyring kilitli kalabilir; hub anahtarlarını okuyamaz.
+- **Linux panosu:** ajan yazdıktan sonra panodaki metin geri konur; görsel gibi metin olmayan içerik geri konamaz, bu yüzden pano boşaltılır ve ajan bunu sana söyler.
+- **Başsız Linux:** masaüstü girişi olmadan keyring kilitli kalabilir; hub anahtarlarını okuyamaz. Telefon o zaman anahtarın keyring'de olduğunu ve bilgisayarda oturum açınca kilidin açılacağını söyler.
 - **Android'de push yok:** uygulama hub'a kalıcı bir bağlantı tutar. Android ya da üretici uygulamayı durdurursa hub onu çaldıramaz; pil ayarları bu yüzden önemlidir.
 - **Akıllı saatler:** bazı saatler telefon kulaklığı olarak kaydolur ve arama sesini kendine çeker.
 
