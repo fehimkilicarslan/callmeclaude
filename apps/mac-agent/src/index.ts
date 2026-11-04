@@ -8,7 +8,7 @@ import qrcode from 'qrcode-terminal';
 import QR from 'qrcode';
 import type { PairingInfo } from '@callmeclaude/protocol';
 import { PROTOCOL_VERSION } from '@callmeclaude/protocol';
-import { CONFIG_PATH, LOG_DIR, loadConfig, planVoiceSessions, saveConfig, voiceSessionMode, type Mode, type VoiceSessions } from './config.ts';
+import { CONFIG_PATH, LOG_DIR, loadConfig, parseVoiceSessionsAnswer, planVoiceSessions, saveConfig, voiceSessionMode, type Mode, type VoiceSessions } from './config.ts';
 import { getSecret, setSecret } from './secrets.ts';
 import { hooksInstalled, installHooks, installService, restartService, uninstallHooks, uninstallService, SERVICE } from './install.ts';
 import { platform, SecretStoreError } from './platform/index.ts';
@@ -84,10 +84,14 @@ async function askVoiceSessions(tmuxInstalled: boolean): Promise<VoiceSessions> 
     console.log('                then you can watch voice-started sessions with `tmux attach`');
   }
   const rl = createInterface({ input: process.stdin, output: process.stdout });
+  // stdin closed (Ctrl+D): take the default instead of hanging.
+  const closed = new Promise<string>((r) => rl.once('close', () => r('')));
   try {
-    const a = (await rl.question('Choice [1]: ')).trim();
-    const second = a === '2';
-    return tmuxInstalled === second ? 'headless' : 'tmux';
+    for (;;) {
+      const choice = parseVoiceSessionsAnswer(await Promise.race([rl.question('Choice [1]: '), closed]), tmuxInstalled);
+      if (choice) return choice;
+      console.log('Please answer 1 or 2 (or press Enter for 1).');
+    }
   } finally {
     rl.close();
   }
