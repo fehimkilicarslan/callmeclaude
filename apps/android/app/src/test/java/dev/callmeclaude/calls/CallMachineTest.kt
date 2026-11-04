@@ -5,6 +5,7 @@ import dev.callmeclaude.calls.CallMachine.Effect
 import dev.callmeclaude.calls.CallMachine.EndCause
 import dev.callmeclaude.calls.CallMachine.Event
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -57,6 +58,21 @@ class CallMachineTest {
         val ready = m.handle(Event.Ready(id))
         assertEquals(listOf(Effect.SetConnectionActive(id)), ready)
         assertEquals(now, m.active?.connectedAt)
+    }
+
+    @Test fun `reconnecting is shown only for a talking call whose link dropped`() {
+        ringing()
+        m.handle(Event.Begin("c_hub1"))
+        m.handle(Event.HubDisconnected)
+        assertFalse(m.reconnecting) // not talking yet: the screen still says "Connecting…"
+        m.handle(Event.HubConnected)
+        m.handle(Event.Ready("c_hub1"))
+        assertFalse(m.reconnecting)
+        m.handle(Event.HubDisconnected)
+        assertTrue(m.reconnecting)
+        // Back: call.start goes out again on the new link (the hub re-attaches) and the label clears.
+        assertEquals(listOf(Effect.SendStart("c_hub1", Direction.OUTBOUND)), m.handle(Event.HubConnected))
+        assertFalse(m.reconnecting)
     }
 
     @Test fun `generated callIds match the iOS format`() {

@@ -68,6 +68,10 @@ class CallMachine(private val clock: () -> Long) {
     var linkUp = false
         private set
 
+    /** The call was talking and the hub link dropped: the call screen says "Reconnecting…". */
+    val reconnecting: Boolean
+        get() = active?.let { it.answered && it.connectedAt != null && !linkUp && !it.unreachable } == true
+
     /** Whether `call.start` went out on the current link (reset on every disconnect). */
     private var startSentOnLink = false
 

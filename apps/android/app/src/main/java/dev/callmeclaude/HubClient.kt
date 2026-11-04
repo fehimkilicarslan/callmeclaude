@@ -2,10 +2,12 @@ package dev.callmeclaude
 
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.util.Log
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.delay
@@ -78,8 +80,14 @@ class HubClient(
     private var isConnected = false
     private var generation = 0
     private val helloWaiters = mutableListOf<(Boolean) -> Unit>()
-    private var reconnectScheduled = false
+    private var waiterDeadline: Job? = null
     private val activeReasons = mutableSetOf<String>()
+    private val policy = LinkPolicy()
+    private var retryJob: Job? = null
+    private var ticker: Job? = null
+
+    /** Last frame of any kind from the hub (elapsedRealtime); written on OkHttp's reader thread. */
+    @Volatile private var lastReceived = 0L
 
     private fun post(block: () -> Unit) {
         scope.launch { block() }
@@ -90,6 +98,12 @@ class HubClient(
     /** Keep the link up while [reason] is active (e.g. "ui" while the app is in the foreground). */
     fun setActive(reason: String, active: Boolean) = post {
         if (active) activeReasons += reason else activeReasons -= reason
+        val inCall = REASON_CALL in activeReasons
+        if (inCall != policy.inCall) {
+            policy.callChanged(inCall)
+            ticker?.cancel()
+            ticker = if (inCall) scope.launch { tickLoop() } else null
+        }
         if (active) ensureConnectedLocked(null)
     }
 
@@ -101,24 +115,63 @@ class HubClient(
             done?.let { main.post { it(true) } }
             return
         }
-        done?.let { helloWaiters += it }
-        if (task == null && candidates.isEmpty()) open()
+        done?.let { addWaiter(it) }
+        apply("requested", policy.connectRequested())
     }
 
     private val shouldStayConnected: Boolean
         get() = _pairing.value != null && (activeReasons.isNotEmpty() || helloWaiters.isNotEmpty())
 
-    private fun open() {
+    /** From [NetworkWatcher] (any thread). */
+    fun networkChanged(change: NetworkWatcher.Change) = post {
+        when (change) {
+            is NetworkWatcher.Change.Available -> apply("network ${change.kind}", policy.networkAvailable(change.id))
+            NetworkWatcher.Change.Lost -> apply("network lost", policy.networkLost())
+        }
+    }
+
+    /** Carries out [LinkPolicy]'s decisions. Hub thread only. */
+    private fun apply(why: String, effects: List<LinkPolicy.Effect>) {
+        if (effects.isNotEmpty() && effects != listOf(LinkPolicy.Effect.Ping)) {
+            Log.d(TAG, "link: $why → $effects (inCall=${policy.inCall})")
+        }
+        for (e in effects) {
+            when (e) {
+                is LinkPolicy.Effect.Connect -> if (shouldStayConnected) open(e.timeoutMs) else policy.stopped()
+                LinkPolicy.Effect.Close -> close("$why")
+                is LinkPolicy.Effect.RetryIn -> {
+                    retryJob?.cancel()
+                    retryJob = scope.launch {
+                        delay(e.ms)
+                        retryJob = null
+                        apply("retry", policy.retryFired())
+                    }
+                }
+                LinkPolicy.Effect.CancelRetry -> {
+                    retryJob?.cancel()
+                    retryJob = null
+                }
+                LinkPolicy.Effect.Ping -> task?.send(AppMessages.ping())
+            }
+        }
+    }
+
+    /** Race every pairing address; the first one whose hub says hello wins. */
+    private fun open(timeoutMs: Long) {
         val p = _pairing.value
         if (p == null || p.urls.isEmpty()) {
             _status.value = "Not paired"
             flushWaiters(false)
+            policy.stopped()
             return
         }
+        // A new race replaces a running one (e.g. it started on a network that is gone now).
+        candidates.forEach { it.cancel() }
+        candidates.clear()
         generation += 1
         val gen = generation
-        _status.value = "Connecting…"
-        Log.d(TAG, "connecting: racing ${p.urls.size} addresses")
+        _status.value = if (policy.inCall && !isConnected) "Reconnecting…" else "Connecting…"
+        Log.d(TAG, "connecting: racing ${p.urls.size} addresses (timeout ${timeoutMs}ms)")
         val auth = AppMessages.auth(p.token, deviceName)
         p.urls.forEachIndexed { i, s ->
             val req = try {
@@ -128,17 +181,20 @@ class HubClient(
             }
             candidates += http.newWebSocket(req, Listener(gen, i, req.url.host, auth))
         }
+        if (candidates.isEmpty()) {
+            apply("no valid address", policy.attemptTimedOut())
+            return
+        }
         scope.launch {
-            delay(7_000)
+            delay(timeoutMs)
             if (gen != generation || isConnected) return@launch
-            Log.d(TAG, "connect: no address answered within 7s")
+            Log.d(TAG, "connect: no address answered within ${timeoutMs}ms")
             candidates.forEach { it.cancel() }
             candidates.clear()
             task?.cancel()
             task = null
             _status.value = "Can't reach your computer"
-            flushWaiters(false)
-            scheduleReconnect(3_000)
+            apply("attempt timed out", policy.attemptTimedOut())
         }
     }
 
@@ -152,28 +208,34 @@ class HubClient(
             webSocket.send(auth)
         }
 
-        override fun onMessage(webSocket: WebSocket, text: String) = post {
-            if (task == null) {
-                // Still racing: the first answer wins.
-                if (gen != generation || webSocket !in candidates) {
+        override fun onMessage(webSocket: WebSocket, text: String) {
+            lastReceived = SystemClock.elapsedRealtime()
+            post {
+                if (task == null) {
+                    // Still racing: the first answer wins.
+                    if (gen != generation || webSocket !in candidates) {
+                        webSocket.cancel()
+                        return@post
+                    }
+                    task = webSocket
+                    candidates.filter { it !== webSocket }.forEach { it.cancel() }
+                    candidates.clear()
+                    Log.d(TAG, "connected via #$index $host")
+                    handle(text)
+                } else if (task === webSocket) {
+                    handle(text)
+                } else {
                     webSocket.cancel()
-                    return@post
                 }
-                task = webSocket
-                candidates.filter { it !== webSocket }.forEach { it.cancel() }
-                candidates.clear()
-                Log.d(TAG, "connected via #$index $host")
-                handle(text)
-            } else if (task === webSocket) {
-                handle(text)
-            } else {
-                webSocket.cancel()
             }
         }
 
         override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
             // Audio. Delivered straight from the reader thread, like the iOS client does.
-            if (task === webSocket) onBinary?.invoke(bytes)
+            if (task === webSocket) {
+                lastReceived = SystemClock.elapsedRealtime()
+                onBinary?.invoke(bytes)
+            }
         }
 
         override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
@@ -188,32 +250,31 @@ class HubClient(
         private fun ended(webSocket: WebSocket, why: String) = post {
             if (task == null && candidates.remove(webSocket)) {
                 Log.d(TAG, "address #$index $host failed: $why")
+                if (candidates.isEmpty() && gen == generation) apply("all addresses failed", policy.allAddressesFailed())
             } else if (task === webSocket && gen == generation) {
-                drop("receive: $why")
+                close("receive: $why")
+                apply("dropped", policy.dropped())
             }
         }
     }
 
-    /** The established connection died. */
-    private fun drop(why: String) {
+    /** Tear down the established connection (dead, or on a network that is gone). */
+    private fun close(why: String) {
         Log.d(TAG, "connection lost: $why")
         task?.cancel()
         task = null
         generation += 1
-        setConnected(false)
-        onDisconnected?.invoke()
+        if (isConnected) {
+            setConnected(false)
+            onDisconnected?.invoke()
+        }
         _status.value = "Connection lost, reconnecting…"
-        scheduleReconnect(500)
     }
 
-    private fun scheduleReconnect(afterMs: Long) {
-        if (reconnectScheduled) return
-        reconnectScheduled = true
-        scope.launch {
-            delay(afterMs)
-            reconnectScheduled = false
-            if (task != null || candidates.isNotEmpty()) return@launch
-            if (shouldStayConnected) open()
+    private suspend fun tickLoop() {
+        while (true) {
+            delay(LinkPolicy.CALL_TICK_MS)
+            apply("tick", policy.tick(SystemClock.elapsedRealtime(), lastReceived))
         }
     }
 
@@ -222,7 +283,21 @@ class HubClient(
         _connected.value = v
     }
 
+    /** Waiters give up after the idle race timeout (iOS: 7 s), however many races run meanwhile. */
+    private fun addWaiter(w: (Boolean) -> Unit) {
+        helloWaiters += w
+        if (waiterDeadline == null) {
+            waiterDeadline = scope.launch {
+                delay(LinkPolicy.IDLE.attemptTimeoutMs)
+                waiterDeadline = null
+                if (!isConnected) flushWaiters(false)
+            }
+        }
+    }
+
     private fun flushWaiters(ok: Boolean) {
+        waiterDeadline?.cancel()
+        waiterDeadline = null
         val ws = helloWaiters.toList()
         helloWaiters.clear()
         if (ws.isNotEmpty()) main.post { ws.forEach { it(ok) } }
@@ -239,7 +314,8 @@ class HubClient(
         candidates.clear()
         if (isConnected) onDisconnected?.invoke()
         setConnected(false)
-        if (p != null) open() else _status.value = "Not paired"
+        policy.stopped()
+        if (p != null) apply("paired", policy.connectRequested()) else _status.value = "Not paired"
     }
 
     // endregion
@@ -253,6 +329,7 @@ class HubClient(
             is HubMessage.Hello -> {
                 msg.snapshot?.let { _snapshot.value = it }
                 setConnected(true)
+                apply("hello", policy.connected())
                 _status.value = "Connected to ${_pairing.value?.name ?: "computer"}"
                 flushWaiters(true)
                 onConnected?.invoke()
@@ -272,7 +349,7 @@ class HubClient(
         task?.send(text)
     }
 
-    /** Microphone audio. Thread-safe; dropped while there is no connection (the hub keeps the call ~20 s). */
+    /** Microphone audio. Thread-safe; dropped while there is no connection (the hub keeps the call 20 s). */
     fun sendBinary(bytes: ByteArray) {
         task?.send(bytes.toByteString())
     }
@@ -286,7 +363,9 @@ class HubClient(
 
     // endregion
 
-    private companion object {
-        const val TAG = "cmc.hub"
+    companion object {
+        private const val TAG = "cmc.hub"
+        /** The [setActive] reason of a live call: reconnect faster while it is set. */
+        const val REASON_CALL = "call"
     }
 }

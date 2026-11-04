@@ -68,6 +68,7 @@ fun CallScreen(calls: CallManager) {
     }
     val ringing = c.incoming && !c.answered
     val status = when {
+        c.reconnecting -> "Reconnecting…"
         c.connectedAt != null -> {
             val s = ((now - c.connectedAt) / 1000).coerceAtLeast(0)
             "%02d:%02d".format(s / 60, s % 60)

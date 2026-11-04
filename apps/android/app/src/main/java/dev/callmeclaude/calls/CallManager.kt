@@ -56,6 +56,8 @@ class CallManager(
         /** Telecom said we may show our ringing UI (onShowIncomingCallUi). */
         val ringing: Boolean,
         val silenced: Boolean,
+        /** Answered and talking, but the link to the hub dropped: we're reconnecting. */
+        val reconnecting: Boolean = false,
     )
 
     data class Line(val role: String, val text: String, val final: Boolean)
@@ -262,6 +264,7 @@ class CallManager(
                 connectedAt = it.connectedAt,
                 ringing = ringingShownFor == it.callId,
                 silenced = silencedFor == it.callId,
+                reconnecting = machine.reconnecting,
             )
         }
         _ui.value = ui
@@ -367,7 +370,7 @@ class CallManager(
 
     companion object {
         private const val TAG = "cmc.call"
-        private const val HUB_REASON = "call"
+        private const val HUB_REASON = HubClient.REASON_CALL
         const val EXTRA_CALL_ID = "dev.callmeclaude.CALL_ID"
         const val EXTRA_TITLE = "dev.callmeclaude.TITLE"
 
