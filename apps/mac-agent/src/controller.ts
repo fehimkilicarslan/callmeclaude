@@ -121,41 +121,56 @@ export class Controller {
     this.st.changed();
   }
 
-  /** Start a new interactive Claude Code session in a detached tmux session. */
-  async startSession(dir: string, task: string): Promise<string> {
-    const name = 'cmc-' + norm(dir.split('/').pop() ?? 'oturum').slice(0, 20) + '-' + Date.now().toString(36).slice(-4);
+  /**
+   * Start a new interactive Claude Code session in a detached tmux session.
+   * `onStuck` fires if the session never gets past its startup screens.
+   */
+  async startSession(dir: string, task: string, onStuck?: (why: string) => void): Promise<string> {
+    const name = 'cmc-' + norm(dir.split('/').pop() ?? 'session').slice(0, 20) + '-' + Date.now().toString(36).slice(-4);
     await execFileP('tmux', ['new-session', '-d', '-s', name, '-c', dir, '-x', '200', '-y', '50', 'claude', task]);
     audit('session.start', { dir, task, tmux: name });
-    void this.acceptTrustPrompt(name, dir);
+    void this.passStartupScreens(name, dir).then((why) => {
+      if (why) {
+        audit('session.start.stuck', { dir, tmux: name, why });
+        onStuck?.(why);
+      }
+    });
     return name;
   }
 
   /**
-   * A first-time folder shows Claude Code's "do you trust this folder?" prompt, which would stall a
-   * voice-started session. The developer asked for this folder by voice, so accept it — but only for
-   * folders inside the configured project roots.
+   * Claude Code can open with blocking screens before it starts working: "do you trust this folder?"
+   * and "new MCP servers found in this project". Either would stall a voice-started session forever.
+   * The developer asked for this folder by voice, so we accept them, but only for folders inside the
+   * configured project roots. Returns a reason string if the session is still stuck, else undefined.
    */
-  private async acceptTrustPrompt(target: string, dir: string) {
+  private async passStartupScreens(target: string, dir: string): Promise<string | undefined> {
     const inRoots = this.cfg.projectRoots.some((r) => dir === r || dir.startsWith(r + '/'));
-    for (let i = 0; i < 20; i++) {
-      await new Promise((r) => setTimeout(r, 500));
-      let screen = '';
+    let screen = '';
+    for (let i = 0; i < 90; i++) {
+      await new Promise((r) => setTimeout(r, 1000));
       try {
         screen = (await execFileP('tmux', ['capture-pane', '-p', '-t', target])).stdout;
       } catch {
-        return;
+        return; // session already gone
       }
       if (/Yes, I trust this folder/.test(screen)) {
-        if (!inRoots) {
-          audit('session.trust.skipped', { dir });
-          return;
-        }
+        if (!inRoots) return 'waiting for the folder trust prompt (folder is outside projectRoots)';
         await execFileP('tmux', ['send-keys', '-t', target, 'Down', 'Enter']);
         audit('session.trust.accepted', { dir });
-        return;
+        continue;
       }
-      if (/❯\s*$|auto mode|bypass permissions|accept edits/m.test(screen)) return; // already in the prompt UI
+      if (/new MCP servers? found/i.test(screen)) {
+        // Enable the project's own (pre-selected) servers inside trusted roots; reject them elsewhere.
+        await execFileP('tmux', ['send-keys', '-t', target, inRoots ? 'Enter' : 'Escape']);
+        audit('session.mcp.' + (inRoots ? 'accepted' : 'rejected'), { dir });
+        continue;
+      }
+      // Working (spinner / "esc to interrupt") or sitting at the input prompt: startup is over.
+      if (/esc to interrupt|auto mode|bypass permissions|accept edits|^\s*❯\s*$/im.test(screen)) return;
     }
+    const tail = screen.trim().split('\n').slice(-4).join(' ').replace(/\s+/g, ' ').slice(0, 160);
+    return `still on a startup screen after 90s: ${tail}`;
   }
 
   private resumeHeadless(s: Session, text: string) {

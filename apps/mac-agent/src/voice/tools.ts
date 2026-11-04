@@ -10,6 +10,9 @@ const bool = (description: string) => ({ type: 'boolean', description });
 const obj = (properties: Record<string, unknown>, required: string[] = []) => ({ type: 'object', properties, required });
 
 const CONFIRMED = bool('Did the developer EXPLICITLY confirm this action by voice? false if not.');
+const CALL_BACK = bool(
+  'Call the developer back when this work finishes or gets stuck, even in desk mode. Default true for work given by phone; false only if the developer says not to call.',
+);
 
 /** Long-running tools run asynchronously; the model keeps talking and the result arrives later. */
 export const LONG_TOOLS = new Set(['computer_task', 'ask_brain']);
@@ -21,7 +24,7 @@ export const declarations: FunctionDeclaration[] = [
     name: 'reply_to_session',
     description: "Pass the developer's instruction to a session (continue, do this, approved: submit it, etc.). Also resolves its pending question.",
     parametersJsonSchema: obj(
-      { project: str('Project name'), instruction: str("Clear instruction for the session, capturing the developer's intent"), confirmed: CONFIRMED },
+      { project: str('Project name'), instruction: str("Clear instruction for the session, capturing the developer's intent"), call_back: CALL_BACK, confirmed: CONFIRMED },
       ['project', 'instruction'],
     ),
   },
@@ -36,8 +39,23 @@ export const declarations: FunctionDeclaration[] = [
   { name: 'release_session', description: 'Release a waiting session with no new instruction; it stops normally.', parametersJsonSchema: obj({ project: str('Project name') }, ['project']) },
   {
     name: 'start_session',
-    description: 'Start a new Claude Code session in a project folder with a task.',
-    parametersJsonSchema: obj({ project: str('Project / folder name'), task: str('Clear task description'), confirmed: CONFIRMED }, ['project', 'task']),
+    description:
+      'Start a NEW Claude Code session in a project folder. Only when no session is open for that project, or the developer explicitly asks for a new/separate session.',
+    parametersJsonSchema: obj(
+      {
+        project: str('Project / folder name'),
+        task: str('Clear task description'),
+        call_back: CALL_BACK,
+        new_session: bool('true only if the developer explicitly asked for a NEW session although one is already open'),
+        confirmed: CONFIRMED,
+      },
+      ['project', 'task'],
+    ),
+  },
+  {
+    name: 'call_me_when_done',
+    description: "Call the developer when a session finishes or gets stuck (\"call me when it's done\"). Works in every mode.",
+    parametersJsonSchema: obj({ project: str('Project name') }, ['project']),
   },
   {
     name: 'computer_task',
@@ -94,6 +112,8 @@ export async function runTool(hub: Hub, name: string, args: any, ctx: { endCall:
       const pend = hub.st.openPending().find((x) => x.sessionId === s.id);
       if ((HIGH_RISK.test(args.instruction) || pend?.risk === 'high' || pend?.risk === 'critical') && !args.confirmed) return needConfirm(args.instruction);
       const via = await hub.controller.instruct(s, args.instruction);
+      const callBack = args.call_back !== false && via !== 'none';
+      if (callBack) hub.st.addCallback({ sessionId: s.id });
       const msg = {
         hold: 'Instruction delivered; the agent is continuing.',
         tmux: 'Instruction typed into the terminal.',
@@ -101,7 +121,7 @@ export async function runTool(hub: Hub, name: string, args: any, ctx: { endCall:
         queue: 'The session is busy; the instruction will be delivered at the next opportunity.',
         none: 'Could not deliver the instruction.',
       }[via];
-      return { ok: true, delivered_via: via, say: msg };
+      return { ok: via !== 'none', delivered_via: via, call_back: callBack, say: callBack ? `${msg} I'll call when it's done.` : msg };
     }
     case 'answer_permission': {
       const s = find(args.project);
@@ -116,11 +136,30 @@ export async function runTool(hub: Hub, name: string, args: any, ctx: { endCall:
       return { ok: s ? hub.controller.release(s) : false };
     }
     case 'start_session': {
-      if (!args.confirmed) return needConfirm(`start a new session in ${args.project}: ${args.task}`);
       const dir = hub.controller.findProjectDir(args.project);
       if (!dir) return { error: 'Project folder not found.', roots: hub.cfg.projectRoots };
-      const tmux = await hub.controller.startSession(dir, args.task);
-      return { ok: true, dir, tmux, say: "Session started. I'll call when it's done or stuck." };
+      const open = hub.st.activeSessions().find((x) => x.cwd === dir || x.cwd.startsWith(dir + '/'));
+      if (open && !args.new_session) {
+        return {
+          error: `A session is already open in ${open.project}. Use reply_to_session to direct it, unless the developer explicitly wants a separate new session.`,
+          open_session: open.project,
+          state: open.state,
+        };
+      }
+      if (!args.confirmed) return needConfirm(`start a new session in ${args.project}: ${args.task}`);
+      const callBack = args.call_back !== false;
+      if (callBack) hub.st.addCallback({ dir });
+      const project = dir.split('/').pop();
+      const tmux = await hub.controller.startSession(dir, args.task, (why) =>
+        hub.calls.enqueue({ priority: 'P1', title: `${project}: could not start`, text: `[${project}] The new session did not start: ${why}`, requested: callBack }),
+      );
+      return { ok: true, dir, tmux, call_back: callBack, say: callBack ? "Session started. I'll call when it's done or stuck." : 'Session started.' };
+    }
+    case 'call_me_when_done': {
+      const s = find(args.project);
+      if (!s) return { error: 'Session not found.', sessions: projects() };
+      hub.st.addCallback({ sessionId: s.id });
+      return { ok: true, say: `I'll call when ${s.project} is done or stuck.` };
     }
     case 'computer_task': {
       if (!args.confirmed) return needConfirm(args.task);

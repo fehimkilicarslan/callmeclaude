@@ -146,6 +146,42 @@ test('desk mode never holds', async () => {
   hub.cfg.mode = 'away';
 });
 
+test('"call me when done" rings even in desk mode, once, for the session started by phone', async () => {
+  hub.cfg.mode = 'desk';
+  const p = await phone();
+  await p.next('hello');
+  // An unrelated session already open in the same folder must not consume the callback.
+  await hook('SessionStart', { session_id: 'old', cwd: '/x/game', source: 'startup' });
+  hub.st.addCallback({ dir: '/x/game' });
+  await hook('SessionStart', { session_id: 'new', cwd: '/x/game', source: 'startup' });
+  assert.equal(hub.st.hasCallback(hub.st.sessions.get('new')), true);
+  assert.equal(hub.st.hasCallback(hub.st.sessions.get('old')), false);
+  const quiet = await hook('Stop', { session_id: 'old', cwd: '/x/game', stop_hook_active: false, last_assistant_message: 'Done.' });
+  assert.deepEqual(quiet, {}, 'other session in desk mode stays quiet');
+
+  const held = hook('Stop', { session_id: 'new', cwd: '/x/game', stop_hook_active: false, last_assistant_message: 'Done: the lobby is redesigned and tests pass.' });
+  const ring = await p.next('call.incoming');
+  assert.match(ring.title, /game/);
+  assert.equal(hub.st.hasCallback(hub.st.sessions.get('new')), false, 'callback is used up');
+  hub.controller.release(hub.st.sessions.get('new'));
+  await held;
+  hub.calls.ringing && clearTimeout(hub.calls.ringing.timer);
+  hub.calls.ringing = undefined;
+  hub.calls.takeAgenda();
+  p.ws.close();
+  hub.cfg.mode = 'away';
+});
+
+test('start_session refuses to open a second session where one is already open', async () => {
+  const { runTool } = await import('../src/voice/tools.ts');
+  hub.cfg.projectRoots = ['/x'];
+  await hook('SessionStart', { session_id: 'plat', cwd: '/x/platform', source: 'startup' });
+  hub.controller.findProjectDir = () => '/x/platform';
+  const r: any = await runTool(hub, 'start_session', { project: 'platform', task: 'improve the lobby', confirmed: true }, { endCall() {} });
+  assert.match(r.error, /already open/);
+  assert.equal(r.open_session, 'platform');
+});
+
 test('hold expires and releases the session', async () => {
   hub.cfg.holdSeconds = 1;
   const r = await hook('Stop', { session_id: 's5', cwd: '/x/exp', stop_hook_active: false, last_assistant_message: 'Done. All tests pass.' });

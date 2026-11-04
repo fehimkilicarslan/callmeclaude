@@ -10,6 +10,8 @@ export interface CallItem {
   /** What the voice agent should tell the developer. */
   text: string;
   pendingId?: string;
+  /** The developer explicitly asked for this call ("call me when it's done"): ignores quiet modes. */
+  requested?: boolean;
 }
 
 interface Ringing {
@@ -50,7 +52,7 @@ export class Calls {
       this.hub.voice.active.inject(item.text, item.priority === 'P0' ? 'now' : 'idle');
       return;
     }
-    if (!this.allowed(item.priority)) return;
+    if (!item.requested && !this.allowed(item.priority)) return;
     if (this.ringing) {
       this.ringing.items.push(item);
       return;

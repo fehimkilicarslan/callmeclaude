@@ -74,6 +74,11 @@ export class State extends EventEmitter {
   holds = new Map<string, Hold>(); // by pendingId
   /** Instructions waiting for a session's next hook event. */
   queued = new Map<string, string[]>();
+  /**
+   * "Call me when it's done" requests: key = session id, or "dir:<path>" for a session that was just
+   * started and has no id yet. Value = expiry (ms). These ring even in desk mode.
+   */
+  callbacks = new Map<string, number>();
   mode: Mode;
   language = 'en-US';
   paused = false;
@@ -92,6 +97,7 @@ export class State extends EventEmitter {
       for (const s of raw.sessions ?? []) this.sessions.set(s.id, { ...s, project: projectName(s.cwd) });
       for (const [k, v] of Object.entries(raw.queued ?? {})) this.queued.set(k, v as string[]);
       this.paused = !!raw.paused;
+      for (const [k, v] of Object.entries(raw.callbacks ?? {})) if ((v as number) > Date.now()) this.callbacks.set(k, v as number);
       // Holds die with the process; their pendings are no longer answerable via hook.
       for (const p of raw.pending ?? []) if (p.status === 'open') this.pending.set(p.id, { ...p, status: 'expired' });
     } catch (e) {
@@ -111,7 +117,7 @@ export class State extends EventEmitter {
     const pending = [...this.pending.values()].filter((p) => Date.parse(p.createdAt) > Date.now() - 864e5);
     writeAtomic(
       STATE_PATH,
-      JSON.stringify({ sessions, pending, queued: Object.fromEntries(this.queued), paused: this.paused }, null, 1),
+      JSON.stringify({ sessions, pending, queued: Object.fromEntries(this.queued), callbacks: Object.fromEntries(this.callbacks), paused: this.paused }, null, 1),
     );
   }
 
@@ -140,6 +146,48 @@ export class State extends EventEmitter {
     }
     this.changed();
     return s;
+  }
+
+  /** Remember that the developer wants a call when this session (or the next session in `dir`) stops. */
+  addCallback(key: { sessionId?: string; dir?: string }, hours = 12) {
+    const k = key.sessionId ?? `dir:${key.dir}`;
+    this.callbacks.set(k, Date.now() + hours * 3600e3);
+    this.changed();
+  }
+
+  private prune() {
+    const now = Date.now();
+    for (const [k, exp] of this.callbacks) if (exp < now) this.callbacks.delete(k);
+  }
+
+  hasCallback(s: Session): boolean {
+    this.prune();
+    return this.callbacks.has(s.id);
+  }
+
+  /**
+   * A session started by phone has no id until its SessionStart hook. Bind the folder's callback to the
+   * first NEW session that opens in that folder (existing sessions there are not affected).
+   */
+  bindCallback(s: Session) {
+    this.prune();
+    for (const [k, exp] of this.callbacks) {
+      if (!k.startsWith('dir:')) continue;
+      const d = k.slice(4);
+      if (s.cwd === d || s.cwd.startsWith(d + '/')) {
+        this.callbacks.set(s.id, exp);
+        this.callbacks.delete(k);
+        this.changed();
+        return;
+      }
+    }
+  }
+
+  consumeCallback(s: Session): boolean {
+    if (!this.hasCallback(s)) return false;
+    this.callbacks.delete(s.id);
+    this.changed();
+    return true;
   }
 
   activeSessions() {

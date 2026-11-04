@@ -111,7 +111,8 @@ async function handle(hub: Hub, event: string, input: Json, pane: string | undef
 
   switch (event) {
     case 'SessionStart': {
-      st.upsertSession(sid, input.cwd, { ...base, state: 'running', summary: 'Session opened.' });
+      const s = st.upsertSession(sid, input.cwd, { ...base, state: 'running', summary: 'Session opened.' });
+      st.bindCallback(s);
       audit('hook', { event, sid, cwd: input.cwd, source: input.source });
       return send({});
     }
@@ -195,11 +196,15 @@ async function onStop(hub: Hub, input: Json, base: Partial<Session>, send: (b: o
     s.state = 'running';
     st.changed();
     audit('queue.delivered', { session: s.id, via: 'Stop', q });
-    s.lastPrompt = `Telefondan yeni talimat: ${q.join(' / ')}`;
+    s.lastPrompt = `New instruction by phone: ${q.join(' / ')}`;
     return send({ decision: 'block', reason: `The developer said by phone (via CallMeClaude): ${q.join(' / ')}` });
   }
 
-  if (st.paused || cfg.mode === 'desk' || cfg.mode === 'sleep') {
+  // "Call me when it's done" overrides desk/sleep mode (but never a panic pause).
+  const wanted = !st.paused && st.consumeCallback(s);
+  if (wanted) audit('callback.due', { session: s.id, project: s.project });
+
+  if (!wanted && (st.paused || cfg.mode === 'desk' || cfg.mode === 'sleep')) {
     const c = quickClassify(lastMessage);
     Object.assign(s, { state: c.state, summary: c.summary });
     st.changed();
@@ -215,10 +220,11 @@ async function onStop(hub: Hub, input: Json, base: Partial<Session>, send: (b: o
   const summary = `${c.summary}${c.ask ? ' ' + c.ask : ''}`;
   const p = hold(hub, s, 'stop', summary, lastMessage, c.risk, send, res);
   hub.calls.enqueue({
-    priority: c.state === 'done' ? 'P2' : 'P1',
-    title: `${s.project}: ${c.state === 'done' ? 'bitti' : c.state === 'blocked' ? 'engel' : 'soru'}`,
+    priority: wanted || c.state !== 'done' ? 'P1' : 'P2',
+    title: `${s.project}: ${c.state === 'done' ? 'done' : c.state === 'blocked' ? 'blocked' : 'question'}`,
     text: `[${s.project}] ${summary}`,
     pendingId: p.id,
+    requested: wanted,
   });
 }
 
@@ -238,12 +244,13 @@ async function onPermission(hub: Hub, input: Json, base: Partial<Session>, send:
     st.changed();
     return send({ hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: { behavior: 'allow' } } });
   }
-  if (st.paused || cfg.mode === 'desk') return send({});
+  // A session the developer asked to hear back from also rings for permissions, even in desk mode.
+  if (st.paused || (cfg.mode === 'desk' && !st.hasCallback(s))) return send({});
 
   const p = hold(hub, s, 'permission', `Asks for permission: ${desc}`, JSON.stringify(input.tool_input ?? {}).slice(0, 2000), riskOf(sig), send, res);
   p.toolName = input.tool_name;
   p.toolInput = input.tool_input;
-  hub.calls.enqueue({ priority: 'P1', title: `${s.project}: permission`, text: `[${s.project}] Asks for permission: ${desc}`, pendingId: p.id });
+  hub.calls.enqueue({ priority: 'P1', title: `${s.project}: permission`, text: `[${s.project}] Asks for permission: ${desc}`, pendingId: p.id, requested: st.hasCallback(s) });
 }
 
 function hold(hub: Hub, s: Session, kind: 'stop' | 'permission', summary: string, detail: string, risk: Risk, send: (b: object) => void, res: ServerResponse): Pending {
