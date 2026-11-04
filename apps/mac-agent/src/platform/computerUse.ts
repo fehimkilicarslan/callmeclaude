@@ -28,7 +28,7 @@ export interface ComputerDriver {
   id: string;
   screenshot: ScreenshotTool | null;
   input: InputTool | null;
-  /** How text is typed: through this clipboard tool (layout-independent), or key by key (plain ASCII only) when null. */
+  /** How text is typed: pasted through this clipboard tool (layout-independent); null = text cannot be typed. */
   clipboard: ClipboardTool | null;
   /** Desktop control is offered only with a screenshot tool: the agent must be able to verify what it did. */
   desktop: boolean;
@@ -226,7 +226,7 @@ export function linuxToolsBlock(d: ComputerDriver, o: { shotDir: string; browser
   return L.join('\n');
 }
 
-/** How the agent types text: always through the hub's helper (pastes via the clipboard, or ASCII key by key). */
+/** How the agent types text: only through the hub's helper, which pastes via the clipboard (no clipboard tool: no typing). */
 function typingLines(d: ComputerDriver, typeCmd: string): string[] {
   const cmd = `\`${typeCmd} -- 'text'\``;
   if (d.clipboard) {
@@ -235,8 +235,9 @@ function typingLines(d: ComputerDriver, typeCmd: string): string[] {
       "- The helper prints what happened. If it says the clipboard held something that could not be put back (e.g. an image), tell the developer in your final reply.",
     ];
   }
+  const pkg = d.env.session === 'wayland' || d.env.session === 'x11' ? clipboardPackage(d.env.session) : 'a clipboard tool';
   return [
-    `- No clipboard tool is installed, so text can only be typed key by key: ${cmd}. Only plain ASCII text works this way (the helper refuses anything else, and keys follow a US layout, so check the result in a screenshot). If the text has other characters (ç, ğ, ü, é, …), do not type it any other way: stop and say that a clipboard tool is missing.`,
+    `- Text CANNOT be typed on this computer: no clipboard tool is installed, and typing key by key follows a US keyboard layout and garbles text on other layouts. Never use \`${d.input} type\` (it is blocked). Clicking and single keys (Enter, Tab, shortcuts) still work. If the task needs typed text, stop and tell the developer to install ${pkg} (\`cmc doctor\` prints the install command).`,
   ];
 }
 
@@ -261,8 +262,8 @@ export const DENY_SHORTCUT =
 export const DENY_HELD_CTRL = 'Press and release Ctrl in the same command: holding it across commands is blocked by CallMeClaude policy.';
 export const DENY_CLIPBOARD =
   "The clipboard tools are blocked by CallMeClaude policy: type text only with the hub's type-text helper, which keeps the developer's clipboard.";
-export const DENY_TYPE_NON_ASCII =
-  "Typing non-ASCII text key by key is blocked by CallMeClaude policy (it depends on the keyboard layout): use the hub's type-text helper.";
+export const DENY_TYPE =
+  "Typing text with xdotool/ydotool type is blocked by CallMeClaude policy (it follows a US keyboard layout and garbles text on other layouts): use the hub's type-text helper.";
 
 const CTRL_NAME = /^(ctrl|control|control_l|control_r)$/i;
 /** Linux key codes: left/right Ctrl, A, X. */
@@ -272,7 +273,7 @@ const SELECT_CUT_CODES = new Set(['30', '45']);
 /**
  * Why a Bash command must not run in a Linux computer task, or undefined (pure). Blocks select-all and cut sent
  * through xdotool (`key ctrl+a`, `keydown ctrl key x`) or ydotool (`key 29:1 30:1 …`, and the 0.x `key ctrl+a`),
- * a Ctrl that is left pressed at the end of a command, the clipboard tools, and non-ASCII `type`.
+ * a Ctrl that is left pressed at the end of a command, the clipboard tools, and any `type` (key-by-key text).
  */
 export function blockedInput(command: string): string | undefined {
   if (/(^|[\s;&|(`$'"])(wl-copy|wl-paste|xclip|xsel)\b/.test(command)) return DENY_CLIPBOARD;
@@ -280,7 +281,7 @@ export function blockedInput(command: string): string | undefined {
     const tool = seg.match(/\b(xdotool|ydotool)\b/)?.[1];
     if (!tool) continue;
     const words = seg.slice(seg.indexOf(tool) + tool.length).trim().split(/\s+/).map((w) => w.replace(/^['"]|['"]$/g, ''));
-    if (words.includes('type') && !isAsciiText(seg)) return DENY_TYPE_NON_ASCII;
+    if (words.includes('type')) return DENY_TYPE;
     // Combos by name: ctrl+a, ctrl+shift+x, Control_L+a (xdotool, ydotool 0.x).
     for (const w of words) {
       const parts = w.split('+');
@@ -317,8 +318,6 @@ export function blockedInput(command: string): string | undefined {
   }
   return undefined;
 }
-
-const isAsciiText = (s: string) => /^[\x00-\x7f]*$/.test(s);
 
 // ---------- ydotool version ----------
 

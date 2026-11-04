@@ -203,6 +203,7 @@ function driverReport(d: ComputerDriver) {
   const parts = [`${d.id}: screenshot ${d.screenshot ?? '—'}, input ${d.input ?? '—'}, clipboard ${d.clipboard ?? '—'}`];
   if (!d.desktop) return `!${parts[0]}. ${d.notes.join(' ')}`;
   if (!d.input) return `!${parts[0]}. Look-only: no mouse/keyboard tool${d.env.session === 'wayland' ? ' (ydotool, see below)' : ''}.`;
+  if (!d.clipboard) return `!${parts[0]}. Cannot type text: no clipboard tool (see missing tools below); clicks and single keys still work.`;
   return parts[0];
 }
 
@@ -480,7 +481,7 @@ function computerUseChecks() {
   if (needed.length) {
     checks.push({
       name: 'Computer use: missing tools',
-      fn: async () => `!${needed.map((m) => `${m.tool} (${m.purpose})`).join(', ')} → ${installCommand(pm, needed.map((m) => m.tool))}`,
+      fn: async () => `!${needed.map((m) => `${m.tool} (${m.purpose === 'clipboard' ? 'clipboard, needed to type text' : m.purpose})`).join(', ')} → ${installCommand(pm, needed.map((m) => m.tool))}`,
     });
   }
   if (d.env.session === 'wayland') {

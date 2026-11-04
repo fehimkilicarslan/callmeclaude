@@ -105,18 +105,21 @@ test('a failed paste still puts the clipboard back', async () => {
   assert.match(r.message, /^Not typed \(xdotool key failed\)\. The clipboard was restored\.$/);
 });
 
-test('without a clipboard tool: ASCII is typed key by key, anything else is refused', async () => {
+test('without a clipboard tool nothing is typed, not even ASCII, and the package to install is named', async () => {
   const desk = fakeDesk({ tool: 'xclip' });
-  const ok = await typeText('Hello, world', { clipboard: null, input: 'ydotool', run: desk.run, sleep });
-  assert.equal(ok.ok, true);
-  assert.deepEqual(desk.calls.at(-1), { cmd: 'ydotool', args: ['type', '--', 'Hello, world'], input: undefined });
-  assert.match(ok.message, /key by key/);
-
-  const n = desk.calls.length;
-  const no = await typeText('Merhaba, çğışöü', { clipboard: null, input: 'xdotool', run: desk.run, sleep });
-  assert.equal(no.ok, false);
-  assert.equal(desk.calls.length, n, 'nothing was run');
-  assert.match(no.message, /no clipboard tool is installed .* only plain ASCII text can be typed.*tell the developer/);
+  for (const [text, input, session, pkg] of [
+    ['Hello, world', 'ydotool', 'wayland', 'the wl-clipboard package'],
+    ['Merhaba, çğışöü', 'xdotool', 'x11', 'the xclip package'],
+    ['abc', 'xdotool', undefined, 'wl-clipboard \\(Wayland\\) or xclip \\(X11\\)'],
+  ] as const) {
+    const r = await typeText(text, { clipboard: null, input, session, run: desk.run, sleep });
+    assert.equal(r.ok, false, text);
+    assert.equal(r.via, 'none');
+    assert.match(r.message, /^Not typed: no clipboard tool is installed/);
+    assert.match(r.message, /Do not type it any other way/);
+    assert.match(r.message, new RegExp(`tell the developer to install ${pkg}; \`cmc doctor\` prints the install command`));
+  }
+  assert.equal(desk.calls.length, 0, 'nothing was run');
 });
 
 // ---------- input guard ----------
@@ -148,19 +151,26 @@ test('the Linux guard allows undo, paste and ordinary keys', () => {
     'xdotool key --clearmodifiers ctrl+shift+v',
     'xdotool key Return',
     'xdotool mousemove 10 10 click 1',
-    "xdotool type --delay 40 -- 'plain ascii'",
     "/usr/bin/node /x/bin/cmc.mjs type-text -- 'Merhaba, çğışöü'",
   ])
     assert.equal(cu.blockedInput(c), undefined, c);
 });
 
-test('the Linux guard blocks a Ctrl left pressed, raw clipboard tools and non-ASCII key-by-key typing', () => {
+test('the Linux guard blocks a Ctrl left pressed, raw clipboard tools and any key-by-key typing', () => {
   assert.equal(cu.blockedInput('ydotool key 29:1'), cu.DENY_HELD_CTRL);
   assert.equal(cu.blockedInput('xdotool keydown ctrl'), cu.DENY_HELD_CTRL);
   for (const c of ["printf 'x' | wl-copy", 'wl-paste', 'xclip -selection clipboard -o', 'echo a | xsel -b'])
     assert.equal(cu.blockedInput(c), cu.DENY_CLIPBOARD, c);
-  assert.equal(cu.blockedInput("ydotool type -- 'Merhaba, çğ'"), cu.DENY_TYPE_NON_ASCII);
-  assert.equal(cu.blockedInput("xdotool type -- 'ü'"), cu.DENY_TYPE_NON_ASCII);
+  for (const c of [
+    "ydotool type -- 'Merhaba, çğ'",
+    "xdotool type -- 'ü'",
+    "ydotool type -- 'abc'",
+    'xdotool type abc',
+    "xdotool type --delay 40 -- 'plain ascii'",
+    "xdotool mousemove 10 10 click 1 type 'hi'",
+    "sleep 1 && ydotool type 'x'",
+  ])
+    assert.equal(cu.blockedInput(c), cu.DENY_TYPE, c);
 });
 
 test('the brain guard denies the shortcut on Linux and writes the denial to the audit trail', async () => {

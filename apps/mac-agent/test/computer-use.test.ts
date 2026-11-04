@@ -177,10 +177,13 @@ test('Linux X11 prompt: scrot screenshot to a temp file, Read, delete; xdotool i
   assert.match(p, /screenshot pixels ARE X11 screen coordinates/);
   assert.ok(p.includes('mcp__claude-in-chrome__'));
   assert.ok(!p.includes('ydotool') && !p.includes('Peekaboo MCP'));
-  // Without a clipboard tool, the helper types ASCII key by key and the agent is told so.
+  // Without a clipboard tool, text cannot be typed at all and the agent is told which package is missing.
   const k = linuxPrompt(X11, tools('scrot', 'xdotool'));
-  assert.match(k, /No clipboard tool is installed, so text can only be typed key by key/);
-  assert.match(k, /do not type it any other way/);
+  assert.match(k, /Text CANNOT be typed on this computer: no clipboard tool is installed/);
+  assert.match(k, /Never use `xdotool type` \(it is blocked\)/);
+  assert.match(k, /tell the developer to install xclip \(`cmc doctor` prints the install command\)/);
+  assert.ok(!k.includes('type-text'));
+  assert.ok(!/key by key: /.test(k));
   for (const r of SHARED_RULES) assert.ok(p.includes(r), r);
   assert.ok(linuxPrompt(X11, tools('import', 'xdotool')).includes('`import -window root /tmp/cmc-screen-X/1.png`'));
   assert.ok(linuxPrompt(X11, tools('maim', 'xdotool')).includes('`maim /tmp/cmc-screen-X/1.png`'));

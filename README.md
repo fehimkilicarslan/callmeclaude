@@ -108,7 +108,7 @@ On Linux and Android instead:
 
 | | |
 |---|---|
-| Linux | Node 22.5+, pnpm, `secret-tool` (libsecret) with an unlocked keyring (on KDE Plasma, KDE Wallet provides it; elsewhere GNOME Keyring); optional: tmux, the computer-use tools for your desktop, including `wl-clipboard` (Wayland) or `xclip` (X11) for typing |
+| Linux | Node 22.5+, pnpm, `secret-tool` (libsecret) with an unlocked keyring (on KDE Plasma, KDE Wallet provides it; elsewhere GNOME Keyring); optional: tmux, the computer-use tools for your desktop, including `wl-clipboard` (Wayland) or `xclip` (X11), without which the agent cannot type text |
 | Android | Android 10+; JDK 17 and the Android SDK to build the APK. On Android 17 the local network permission is needed only for LAN addresses; Tailscale works without it |
 
 ## Quick start

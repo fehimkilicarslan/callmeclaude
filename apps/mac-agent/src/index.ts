@@ -317,7 +317,7 @@ async function typeTextCommand(args: string[]) {
     for await (const c of process.stdin) text += c;
   }
   const d = linuxComputerDriver(process.env);
-  const r = await typeText(text, { clipboard: d.clipboard, input: d.input, terminal: opts.includes('--terminal'), run: spawnRunner, sleep });
+  const r = await typeText(text, { clipboard: d.clipboard, input: d.input, session: d.env.session, terminal: opts.includes('--terminal'), run: spawnRunner, sleep });
   // Never the text itself: it may be anything the developer dictated.
   audit('computer.type', { chars: [...text].length, via: r.via, clipboard: r.clipboard, ok: r.ok });
   console.log(r.message);

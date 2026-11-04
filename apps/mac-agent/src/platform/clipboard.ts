@@ -3,7 +3,8 @@
  *
  * ydotool and xdotool send key codes for a US keyboard layout, so on any other layout typed text comes out wrong
  * (on Turkish Q "Merhaba," became "Merhabaö"). Pasting is layout-independent: the text goes onto the clipboard,
- * Ctrl+V is pressed, and the clipboard is put back the way it was. The logic is pure apart from the injected
+ * Ctrl+V is pressed, and the clipboard is put back the way it was. Without a clipboard tool nothing is typed at all
+ * (key by key would break even ASCII: on Turkish Q "i" became "ı" and "," became "ö"). The logic is pure apart from the injected
  * `run`/`sleep`, so the whole flow is testable without a display.
  */
 import { spawn } from 'node:child_process';
@@ -34,9 +35,6 @@ export interface RunResult {
 }
 /** Run a command; `input` goes to stdin. `detach`: the command forks a selection owner (wl-copy, xclip -i, xsel -i). */
 export type Runner = (cmd: string, args: string[], o?: { input?: string; detach?: boolean }) => Promise<RunResult>;
-
-const ASCII = /^[\x20-\x7e\t\n]*$/;
-export const isPlainAscii = (s: string) => ASCII.test(s);
 
 /** Read what is on the clipboard now, without changing it. */
 export async function saveClipboard(tool: ClipboardTool, run: Runner): Promise<ClipboardSnapshot> {
@@ -86,38 +84,35 @@ export interface TypeTextResult {
   /** One or two sentences for the agent (printed by `cmc type-text`). */
   message: string;
   /** For the audit trail: how the text went in and what happened to the clipboard (never the text itself). */
-  via: 'clipboard' | 'keys' | 'none';
+  via: 'clipboard' | 'none';
   clipboard?: ClipboardSnapshot['kind'];
 }
 
+/** What the agent hears when no clipboard tool is installed: nothing is typed, and which package to install. */
+export function noClipboardMessage(session?: SessionKind) {
+  const pkg = session === 'wayland' || session === 'x11' ? `the ${clipboardPackage(session)} package` : 'wl-clipboard (Wayland) or xclip (X11)';
+  return `Not typed: no clipboard tool is installed, so text cannot be typed on this computer (typing key by key follows a US keyboard layout and garbles text on other layouts). Do not type it any other way. Stop and tell the developer to install ${pkg}; \`cmc doctor\` prints the install command.`;
+}
+
 /**
- * Put `text` into the focused field. With a clipboard tool: save the clipboard, copy the text, press the paste
- * shortcut, wait for the app to fetch it, put the clipboard back (text, or empty). Without one: type key by key,
- * plain ASCII only (anything else would depend on the keyboard layout).
+ * Put `text` into the focused field: save the clipboard, copy the text, press the paste shortcut, wait for the app
+ * to fetch it, put the clipboard back (text, or empty). Without a clipboard tool nothing is typed (a clear error).
  */
 export async function typeText(
   text: string,
-  o: { clipboard: ClipboardTool | null; input: InputTool | null; terminal?: boolean; run: Runner; sleep: (ms: number) => Promise<unknown>; settleMs?: number },
+  o: {
+    clipboard: ClipboardTool | null;
+    input: InputTool | null;
+    session?: SessionKind;
+    terminal?: boolean;
+    run: Runner;
+    sleep: (ms: number) => Promise<unknown>;
+    settleMs?: number;
+  },
 ): Promise<TypeTextResult> {
   const n = [...text].length;
   if (!o.input) return { ok: false, via: 'none', message: 'No input tool (xdotool / ydotool) is available, so nothing can be typed on this computer.' };
-  if (!o.clipboard) {
-    if (!isPlainAscii(text)) {
-      return {
-        ok: false,
-        via: 'none',
-        message:
-          'Not typed: no clipboard tool is installed (wl-clipboard on Wayland, xclip on X11), and without one only plain ASCII text can be typed. This text has other characters: do not type it another way; tell the developer.',
-      };
-    }
-    const r = await o.run(o.input, o.input === 'xdotool' ? ['type', '--delay', '40', '--', text] : ['type', '--', text]);
-    if (r.status !== 0) return { ok: false, via: 'keys', message: `${o.input} type failed.` };
-    return {
-      ok: true,
-      via: 'keys',
-      message: `Typed ${n} characters key by key (no clipboard tool). Keys follow a US layout: check the result in a screenshot.`,
-    };
-  }
+  if (!o.clipboard) return { ok: false, via: 'none', message: noClipboardMessage(o.session) };
 
   const saved = await saveClipboard(o.clipboard, o.run);
   let pasted = false;

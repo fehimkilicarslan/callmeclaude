@@ -108,7 +108,7 @@ Linux ve Android'de bunların yerine:
 
 | | |
 |---|---|
-| Linux | Node 22.5+, pnpm, kilidi açık bir keyring ile `secret-tool` (libsecret) (KDE Plasma'da bunu KDE Wallet sağlar; diğerlerinde GNOME Keyring); isteğe bağlı: tmux, masaüstün için bilgisayar kullanımı araçları, yazı yazmak için `wl-clipboard` (Wayland) ya da `xclip` (X11) dahil |
+| Linux | Node 22.5+, pnpm, kilidi açık bir keyring ile `secret-tool` (libsecret) (KDE Plasma'da bunu KDE Wallet sağlar; diğerlerinde GNOME Keyring); isteğe bağlı: tmux, masaüstün için bilgisayar kullanımı araçları, `wl-clipboard` (Wayland) ya da `xclip` (X11) dahil; bunlar olmadan ajan metin yazamaz |
 | Android | Android 10+; APK'yı derlemek için JDK 17 ve Android SDK. Android 17'de yerel ağ izni yalnızca LAN adresleri için gerekir; Tailscale onsuz da çalışır |
 
 ## Hızlı başlangıç
