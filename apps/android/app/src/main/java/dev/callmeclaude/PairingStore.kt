@@ -4,7 +4,6 @@ import android.content.Context
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
-import android.util.Log
 import java.security.KeyStore
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
@@ -30,7 +29,7 @@ class PairingStore(context: Context) {
             val json = String(cipher.doFinal(bytes, IV_LEN, bytes.size - IV_LEN), Charsets.UTF_8)
             (PairingInfo.parse(json) as? PairingResult.Ok)?.info
         } catch (e: Exception) {
-            Log.w(TAG, "stored pairing unreadable, dropping it", e)
+            AppLog.w(TAG, "stored pairing unreadable, dropping it: ${e.javaClass.simpleName}")
             prefs.edit().remove(KEY).apply()
             null
         }

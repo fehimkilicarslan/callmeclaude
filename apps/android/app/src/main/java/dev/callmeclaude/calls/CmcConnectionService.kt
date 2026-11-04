@@ -15,7 +15,7 @@ import android.telecom.ConnectionService
 import android.telecom.DisconnectCause
 import android.telecom.PhoneAccountHandle
 import android.telecom.TelecomManager
-import android.util.Log
+import dev.callmeclaude.AppLog
 import android.annotation.SuppressLint
 import android.annotation.TargetApi
 import dev.callmeclaude.CallMeClaudeApp
@@ -31,7 +31,7 @@ class CmcConnectionService : ConnectionService() {
 
     override fun onCreateIncomingConnectionFailed(account: PhoneAccountHandle?, request: ConnectionRequest) {
         val callId = callIdOf(request, TelecomManager.EXTRA_INCOMING_CALL_EXTRAS)
-        Log.w(TAG, "incoming connection refused by Telecom: $callId")
+        AppLog.w(TAG, "incoming connection refused by Telecom: $callId")
         calls.connectionFailed(callId)
     }
 
@@ -42,7 +42,7 @@ class CmcConnectionService : ConnectionService() {
 
     override fun onCreateOutgoingConnectionFailed(account: PhoneAccountHandle?, request: ConnectionRequest) {
         val callId = callIdOf(request, TelecomManager.EXTRA_OUTGOING_CALL_EXTRAS)
-        Log.w(TAG, "outgoing connection refused by Telecom: $callId")
+        AppLog.w(TAG, "outgoing connection refused by Telecom: $callId")
         calls.connectionFailed(callId)
     }
 
@@ -58,7 +58,7 @@ class CmcConnectionService : ConnectionService() {
     }
 
     private fun failed(why: String): Connection {
-        Log.w(TAG, why)
+        AppLog.w(TAG, why)
         return Connection.createFailedConnection(DisconnectCause(DisconnectCause.ERROR, why))
     }
 
@@ -133,7 +133,7 @@ class CmcConnection(private val calls: CallManager, val callId: String) : Connec
         main.removeCallbacks(guardCheck)
         main.postDelayed(guardCheck, GUARD_SETTLE_MS)
         val t = SystemClock.elapsedRealtime() - startedAt
-        Log.d(TAG, "routes +${t}ms: " + available.joinToString { describe(it, it.id == router.current?.id) } +
+        AppLog.i(TAG, "routes +${t}ms: " + available.joinToString { describe(it, it.id == router.current?.id) } +
             (if (router.current?.id != before?.id) " | now ${router.current?.kind}" else ""))
         calls.routesChanged(this)
         firstRoute()
@@ -141,7 +141,7 @@ class CmcConnection(private val calls: CallManager, val callId: String) : Connec
 
     private val guardCheck = Runnable {
         router.guard(SystemClock.elapsedRealtime())?.let {
-            Log.d(TAG, "Telecom left its initial route on its own: back to ${it.kind}")
+            AppLog.i(TAG, "Telecom left its initial route on its own: back to ${it.kind}")
             request(it)
         }
     }
@@ -149,7 +149,7 @@ class CmcConnection(private val calls: CallManager, val callId: String) : Connec
     private fun firstRoute() {
         if (routeKnown || router.available.isEmpty() || router.current == null) return
         routeKnown = true
-        Log.d(TAG, "Telecom's initial route: ${router.initial?.kind} " +
+        AppLog.i(TAG, "Telecom's initial route: ${router.initial?.kind} " +
             "(bluetooth devices available: ${router.available.count { it.kind == AudioRoute.Kind.BLUETOOTH }})")
         calls.routeReady(this)
     }
@@ -165,7 +165,7 @@ class CmcConnection(private val calls: CallManager, val callId: String) : Connec
     fun select(id: String) = router.select(id)?.let(::request)
 
     private fun request(target: AudioRoute) {
-        Log.d(TAG, "requesting route ${target.kind}")
+        AppLog.i(TAG, "requesting route ${target.kind}")
         if (Build.VERSION.SDK_INT >= 34) requestEndpoint(target) else requestLegacy(target)
     }
 
@@ -179,7 +179,7 @@ class CmcConnection(private val calls: CallManager, val callId: String) : Connec
             object : OutcomeReceiver<Void, CallEndpointException> {
                 override fun onResult(result: Void?) = Unit
                 override fun onError(error: CallEndpointException) {
-                    Log.w(TAG, "endpoint change to ${target.kind} failed: ${error.code}")
+                    AppLog.w(TAG, "endpoint change to ${target.kind} failed: ${error.code}")
                 }
             },
         )

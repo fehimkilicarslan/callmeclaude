@@ -28,16 +28,18 @@ class PlaybackQueue(private val maxBytes: Int = PLAY_RATE * 2 * 15) {
     var dropped = 0L
         private set
 
-    fun offer(chunk: ByteArray) = lock.withLock {
+    fun offer(chunk: ByteArray) {
         if (chunk.isEmpty()) return
-        chunks.addLast(chunk)
-        bytes += chunk.size
-        while (bytes > maxBytes && chunks.isNotEmpty()) {
-            val old = chunks.removeFirst()
-            bytes -= old.size
-            dropped += old.size
+        lock.withLock {
+            chunks.addLast(chunk)
+            bytes += chunk.size
+            while (bytes > maxBytes && chunks.isNotEmpty()) {
+                val old = chunks.removeFirst()
+                bytes -= old.size
+                dropped += old.size
+            }
+            notEmpty.signal()
         }
-        notEmpty.signal()
     }
 
     /** Next chunk and the generation it belongs to, or null after [timeoutMs]. */

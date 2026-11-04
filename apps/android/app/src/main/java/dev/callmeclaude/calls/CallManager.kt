@@ -14,7 +14,7 @@ import android.telecom.DisconnectCause
 import android.telecom.PhoneAccount
 import android.telecom.PhoneAccountHandle
 import android.telecom.TelecomManager
-import android.util.Log
+import dev.callmeclaude.AppLog
 import dev.callmeclaude.HubClient
 import dev.callmeclaude.HubMessage
 import dev.callmeclaude.AppMessages
@@ -102,6 +102,10 @@ class CallManager(
     }
 
     private fun registerAccount() {
+        // CAPABILITY_SELF_MANAGED is deprecated in API 37 in favour of the transactional VoIP API
+        // (TelecomManager.addCall, API 34+) or the Core Telecom Jetpack library. Neither fits:
+        // minSdk is 29, and the project adds no dependencies. It still works on API 37.
+        @Suppress("DEPRECATION")
         val account = PhoneAccount.builder(accountHandle, "CallMeClaude")
             .setCapabilities(PhoneAccount.CAPABILITY_SELF_MANAGED)
             .addSupportedUriScheme(PhoneAccount.SCHEME_SIP)
@@ -110,7 +114,7 @@ class CallManager(
         try {
             telecom.registerPhoneAccount(account)
         } catch (e: RuntimeException) {
-            Log.w(TAG, "registerPhoneAccount failed: $e")
+            AppLog.w(TAG, "registerPhoneAccount failed: $e")
         }
     }
 
@@ -244,7 +248,7 @@ class CallManager(
     fun dispatch(e: Event) {
         val wasActive = machine.active != null
         val effects = machine.handle(e)
-        if (effects.isNotEmpty() || e !is Event.HubConnected) Log.d(TAG, "$e → $effects")
+        if (effects.isNotEmpty() || e !is Event.HubConnected) AppLog.i(TAG, "$e → $effects")
         val nowActive = machine.active != null
         if (wasActive != nowActive) hub.setActive(HUB_REASON, nowActive)
         // Foreground service types first: the microphone type must be in place before AudioRecord starts.
@@ -283,7 +287,7 @@ class CallManager(
                 try {
                     telecom.addNewIncomingCall(accountHandle, Bundle().apply { putBundle(TelecomManager.EXTRA_INCOMING_CALL_EXTRAS, extras) })
                 } catch (e: RuntimeException) {
-                    Log.w(TAG, "addNewIncomingCall failed: $e")
+                    AppLog.w(TAG, "addNewIncomingCall failed: $e")
                     main.post { dispatch(Event.TelecomFailed(f.callId)) }
                 }
             }
@@ -296,12 +300,12 @@ class CallManager(
                     if (!telecom.isOutgoingCallPermitted(accountHandle)) error("another call is in progress")
                     telecom.placeCall(Uri.fromParts(PhoneAccount.SCHEME_SIP, "claude", null), extras)
                 } catch (e: RuntimeException) {
-                    Log.w(TAG, "placeCall failed: $e")
+                    AppLog.w(TAG, "placeCall failed: $e")
                     main.post { dispatch(Event.TelecomFailed(f.callId)) }
                 }
             }
             is Effect.SendStart -> {
-                Log.d(TAG, "call.start ${f.callId} ${f.direction.wire}")
+                AppLog.i(TAG, "call.start ${f.callId} ${f.direction.wire}")
                 hub.sendJSON(AppMessages.callStart(f.callId, f.direction.wire))
             }
             is Effect.SendEnd -> hub.sendJSON(AppMessages.callEnd(f.callId))
@@ -347,7 +351,7 @@ class CallManager(
 
     /** The computer can't be reached: say so in the configured voice language, then hang up (scheduled by the machine). */
     private fun speakUnreachable() {
-        Log.d(TAG, "hub unreachable for call")
+        AppLog.i(TAG, "hub unreachable for call")
         val lang = hub.snapshot.value?.language ?: "en-US"
         val text = unreachableText(lang)
         tts?.shutdown()

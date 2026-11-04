@@ -282,4 +282,52 @@ class LinkPolicyTest {
     }
 
     // endregion
+
+    // region bad token (4003)
+
+    @Test
+    fun `4003 during the race stops retrying`() {
+        p.networkAvailable("wifi")
+        p.connectRequested()
+        assertEquals(emptyList<Effect>(), p.tokenRejected())
+        assertTrue(p.rejected)
+        assertEquals(Link.DOWN, p.link)
+        // Nothing brings it back on its own: no retry, no network change, no request from the UI.
+        assertEquals(emptyList<Effect>(), p.connectRequested())
+        assertEquals(emptyList<Effect>(), p.networkAvailable("cellular"))
+        assertEquals(emptyList<Effect>(), p.networkLost())
+        assertEquals(emptyList<Effect>(), p.networkAvailable("wifi"))
+        assertEquals(emptyList<Effect>(), p.retryFired())
+        assertEquals(emptyList<Effect>(), p.attemptTimedOut())
+        assertEquals(emptyList<Effect>(), p.dropped())
+    }
+
+    @Test
+    fun `4003 cancels a pending retry`() {
+        p.connectRequested()
+        assertEquals(listOf(Effect.RetryIn(3_000)), p.attemptTimedOut())
+        p.connectRequested() // a race is running again, the timer is not
+        p.attemptTimedOut()
+        assertEquals(listOf(Effect.CancelRetry), p.tokenRejected())
+        assertEquals(false, p.retryPending)
+    }
+
+    @Test
+    fun `4003 on a live socket closes it`() {
+        up(inCall = true)
+        assertEquals(listOf(Effect.Close), p.tokenRejected())
+        assertEquals(emptyList<Effect>(), p.tick(100_000, 0))
+    }
+
+    @Test
+    fun `a new pairing clears the rejection`() {
+        p.connectRequested()
+        p.tokenRejected()
+        p.stopped()
+        p.paired()
+        assertEquals(false, p.rejected)
+        assertEquals(listOf(Effect.Connect(7_000)), p.connectRequested())
+    }
+
+    // endregion
 }

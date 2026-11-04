@@ -176,6 +176,9 @@ object AppMessages {
     fun resume(): String = JSONObject().put("type", "resume").toString()
     fun ping(): String = JSONObject().put("type", "ping").toString()
 
+    /** Diagnostics for the hub's app log (packages/protocol: `{ type: 'log'; lines: string[] }`). */
+    fun log(lines: List<String>): String = JSONObject().put("type", "log").put("lines", JSONArray(lines)).toString()
+
     /** [direction] is from the hub's point of view: "outbound" = the hub called us, "inbound" = we called it. */
     fun callStart(callId: String, direction: String): String =
         JSONObject().put("type", "call.start").put("callId", callId).put("direction", direction).toString()

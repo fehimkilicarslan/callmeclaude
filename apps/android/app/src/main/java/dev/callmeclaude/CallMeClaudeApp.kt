@@ -22,5 +22,11 @@ class CallMeClaudeApp : Application() {
         NetworkWatcher(this, hub::networkChanged).start()
         HubService.ensureChannels(this)
         calls = CallManager(this, hub) { m -> CallAudio(this, hub::sendBinary) { m.micMuted } }
+        val p = dev.callmeclaude.ui.PlatformChecks.read(this)
+        AppLog.i(
+            "cmc.app",
+            "start: sdk=${Build.VERSION.SDK_INT} paired=${hub.pairing.value != null} notifications=${p.notifications} " +
+                "fullScreenIntent=${p.fullScreenIntent} batteryExempt=${p.battery}",
+        )
     }
 }

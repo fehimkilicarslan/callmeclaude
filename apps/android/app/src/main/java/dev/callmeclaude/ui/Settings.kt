@@ -16,7 +16,9 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -34,6 +36,7 @@ import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.callmeclaude.HubClient
+import dev.callmeclaude.warnings
 import java.util.Date
 
 /** Voice languages (BCP-47), same list as iOS. The app UI stays in English; this is what Claude speaks on calls. */
@@ -51,6 +54,10 @@ fun SettingsScreen(hub: HubClient, onDone: () -> Unit) {
     val pairing by hub.pairing.collectAsStateWithLifecycle()
     val connected by hub.connected.collectAsStateWithLifecycle()
     val lastSeen by hub.lastSeen.collectAsStateWithLifecycle()
+    val status by hub.status.collectAsStateWithLifecycle()
+    val localNetwork = rememberLocalNetworkState(recheckKey = status, onGranted = { hub.ensureConnected() })
+    val health = rememberHealth(hub, localNetwork)
+    val problems = warnings(health.health)
     var confirmUnpair by remember { mutableStateOf(false) }
     var languageMenu by remember { mutableStateOf(false) }
     val context = LocalContext.current
@@ -73,6 +80,34 @@ fun SettingsScreen(hub: HubClient, onDone: () -> Unit) {
             verticalArrangement = Arrangement.spacedBy(8.dp),
             modifier = Modifier.padding(inner).fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
         ) {
+            SectionTitle("Computer")
+            Card {
+                Labeled("Name", pairing?.name ?: "—")
+                Labeled("Status", if (connected) "Connected" else status)
+                lastSeen?.let { Labeled("Last seen", DateFormat.getTimeFormat(context).format(Date(it))) }
+                OutlinedButton(
+                    onClick = { confirmUnpair = true },
+                    border = BorderStroke(1.dp, Palette.red.copy(alpha = 0.6f)),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Palette.red),
+                    modifier = Modifier.fillMaxWidth(),
+                ) { Text("Unpair this computer") }
+            }
+            Footer("Unpairing forgets this computer. To pair again, run cmc pair on it and scan the code.")
+
+            SectionTitle("This phone")
+            if (problems.isEmpty()) {
+                Card { Text("Everything Claude needs to reach you is allowed.", color = MaterialTheme.colorScheme.onSurfaceVariant) }
+            }
+            problems.forEach { w ->
+                WarningCard(
+                    w,
+                    localNetwork = localNetwork,
+                    onPairAgain = { hub.setPairing(null); onDone() },
+                    onDismissBattery = null,
+                )
+            }
+            if (isSamsung() && health.health.ignoringBatteryOptimizations) Footer(SAMSUNG_BATTERY_TEXT)
+
             SectionTitle("Conversation")
             Card {
                 val code = snapshot?.language ?: "en-US"
@@ -92,17 +127,6 @@ fun SettingsScreen(hub: HubClient, onDone: () -> Unit) {
                 }
             }
             Footer("Claude speaks this language on calls and writes session summaries in it. Takes full effect from the next call.")
-
-            SectionTitle("Computer")
-            Card {
-                Labeled("Name", pairing?.name ?: "—")
-                Labeled("Status", if (connected) "Connected" else "Offline")
-                lastSeen?.let { Labeled("Last seen", DateFormat.getTimeFormat(context).format(Date(it))) }
-                TextButton(
-                    onClick = { confirmUnpair = true },
-                    colors = ButtonDefaults.textButtonColors(contentColor = Palette.red),
-                ) { Text("Unpair this computer") }
-            }
 
             SectionTitle("About")
             Card {
