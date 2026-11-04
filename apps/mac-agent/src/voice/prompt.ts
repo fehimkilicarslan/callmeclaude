@@ -1,6 +1,7 @@
 import type { Hub } from '../hub.ts';
 import type { CallItem } from '../calls.ts';
 import { languageName, redact } from '../util.ts';
+import { platform, type Platform } from '../platform/index.ts';
 
 const STATE_LABEL: Record<string, string> = {
   running: 'working',
@@ -17,10 +18,10 @@ const STATE_LABEL: Record<string, string> = {
  * The voice agent's instructions. Written in English; the agent always SPEAKS the configured
  * language (config.language, e.g. "tr-TR" → Turkish), translating tool results and hub notices.
  */
-export function systemPrompt(hub: Hub) {
+export function systemPrompt(hub: Pick<Hub, 'cfg'>, p: Pick<Platform, 'words'> = platform) {
   const ride = hub.cfg.mode === 'ride';
   const lang = languageName(hub.cfg.language);
-  return `You are "Claude", the voice of CallMeClaude: a supervisor for the Claude Code sessions running on the developer's Mac. You are on a PHONE CALL with the developer right now.
+  return `You are "Claude", the voice of CallMeClaude: a supervisor for the Claude Code sessions running on ${p.words.owners}. You are on a PHONE CALL with the developer right now.
 ${ride ? 'The developer is riding a motorcycle and hears you through a helmet intercom: be extremely short and clear.' : 'The developer is away from the computer and cannot look at a screen.'}
 
 LANGUAGE

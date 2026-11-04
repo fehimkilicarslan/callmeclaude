@@ -211,7 +211,7 @@ async function main() {
 
     case 'do': {
       const task = flags._.join(' ');
-      if (!task) return console.log('usage: cmc do "<what the hub should do on this Mac>"');
+      if (!task) return console.log(`usage: cmc do "<what the hub should do on ${platform.words.this}>"`);
       console.log('⏳ The hub is working on it…');
       const r = await api('do', { task, project: typeof flags.project === 'string' ? flags.project : undefined });
       return console.log(r.result);
@@ -293,7 +293,7 @@ async function main() {
   run [dir] [task]     Start Claude Code inside tmux (so the hub can type into it)
   ignore [dir] [--remove|--list]
                        Watch-only: report status, never hold or call
-  do "<task>"          Let the hub do something on this Mac (browser/desktop)
+  do "<task>"          Let the hub do something on ${platform.words.this} (browser/desktop)
   panic | resume       Interrupt everything / resume automation
   doctor               Check the installation
   logs [-f]            Hub logs
