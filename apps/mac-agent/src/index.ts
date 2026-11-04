@@ -15,6 +15,7 @@ import { platform, SecretStoreError } from './platform/index.ts';
 import { onPath } from './platform/linux.ts';
 import { execFileP } from './util.ts';
 import { apnsConfigured, apnsTexts } from './apns.ts';
+import { pairTexts } from './cliTexts.ts';
 
 const [cmd = 'help', ...rest] = process.argv.slice(2);
 const flags = parseFlags(rest);
@@ -186,9 +187,10 @@ async function main() {
       const png = join(CONFIG_PATH, '..', 'pair.png');
       await QR.toFile(png, text, { width: 640, margin: 2 });
       if (!flags['no-open']) platform.openFile(png);
-      console.log('\nIn the CallMeClaude app tap "Pair Mac" and scan this QR code. To enter it manually:\n');
+      const say = pairTexts(platform.id);
+      console.log(say.scan);
       console.log(text);
-      if (!ts.ip) console.log('\n⚠️  Tailscale is not connected: to reach this Mac on the road, log in to Tailscale on the Mac and the phone, then run `cmc pair` again.');
+      if (!ts.ip) console.log(say.noTailscale);
       return;
     }
 
