@@ -20,6 +20,13 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Paired: reconnect after a reboot or an app update without the user opening the app (BootReceiver). -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <!--
+        The system "stop optimising battery" dialog (Settings card). The hub can only reach the phone
+        over the app's own socket, so Doze/app standby must not cut it; there is no FCM fallback.
+    -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
 
     <!-- Calls: self-managed ConnectionService, lock-screen ringing, call-time FGS types. -->
@@ -87,6 +94,16 @@
         <receiver
             android:name=".calls.CallActionReceiver"
             android:exported="false" />
+
+        <!-- Exported for the system broadcasts below, which only the system can send. -->
+        <receiver
+            android:name=".BootReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
 
         <!-- ZXing's scanner defaults to landscape; follow the device instead. -->
         <activity

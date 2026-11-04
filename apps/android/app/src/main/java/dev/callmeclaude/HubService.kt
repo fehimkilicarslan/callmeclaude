@@ -178,7 +178,10 @@ class HubService : Service() {
             }
         }
 
-        /** Start (paired) or stop (unpaired). Call from a foreground Activity: background starts are restricted. */
+        /**
+         * Start (paired) or stop (unpaired). Call from a foreground Activity or from [BootReceiver]:
+         * other background starts are refused (unless the app is exempt from battery optimisation).
+         */
         fun sync(context: Context, paired: Boolean) {
             val i = Intent(context, HubService::class.java)
             if (!paired) {
