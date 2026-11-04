@@ -2,6 +2,8 @@
 
 Senaryo: Developer motosikletle uzun yola çıkıyor, Mac evde. Uzak masaüstü yok, yalnızca CallMeClaude var.
 
+> **Linux:** Aşağıdaki `pmset`/launchd/FileVault maddeleri macOS içindir. Linux karşılıkları (linger, sleep hedeflerini maskelemek, kapak ayarı, kilitli keyring) [INSTALLATION.md › Linux hub](../INSTALLATION.md#linux-hub) bölümünde; `cmc doctor` bunları kontrol eder.
+
 ## 1. Mac'in hep açık ve ulaşılabilir kalması
 
 | Risk | Önlem |

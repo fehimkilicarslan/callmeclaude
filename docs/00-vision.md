@@ -34,7 +34,7 @@ CallMeClaude = **ses-öncelikli, proaktif, çok-oturumlu bir Claude Code süperv
 ## Kapsam dışı (şimdilik)
 
 - Çok kullanıcılı / ekip kullanımı, hosted servis, abonelik satışı veya paylaşımı.
-- Windows / Linux Hub (mimari buna izin verecek ama ilk hedef macOS).
+- Windows Hub. (İlk hedef macOS'tu; Linux Hub artık var: [ADR-0006](adr/0006-linux-hub.md), [ADR-0008](adr/0008-linux-computer-use.md). Telefon tarafında iPhone'un yanında Android uygulaması da var: [ADR-0007](adr/0007-android-app.md).)
 - Claude Desktop **sohbet** pencerelerinin (claude.ai chat) tam kontrolü — v2'de Accessibility ile okuma düşünülebilir. İlk hedef Claude Code oturumları (terminal, IDE, Desktop içindeki Code sekmesi).
 - PSTN (gerçek telefon numarası) araması — opsiyonel eklenti olarak ([05](05-calling-and-mobile.md#pstn-yedeği)).
 

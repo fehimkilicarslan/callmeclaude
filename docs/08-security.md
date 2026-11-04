@@ -13,7 +13,7 @@ CallMeClaude, sesle **tüm bilgisayarı** yönetebilen bir sistem. Bu, ciddi bir
 | Yanlış anlaşılan sesli komut | "Deploy etme" → "deploy et" | Risk ≥ medium eylemler geri okunarak teyit edilir; geri alınamaz eylemler için iki adımlı onay |
 | Kontrolden çıkan ajan döngüsü | Hub sürekli computer-use yapar | Görev başı zaman/adım bütçesi; insan HID girişinde anında durma; **panik komutu** |
 | Hook'ların kötüye kullanımı | Yerel başka bir süreç Hub'a sahte olay yollar | Hook istekleri `CMC_HOOK_TOKEN` taşır; Hub yalnızca localhost |
-| Abonelik/kimlik bilgisi sızıntısı | Claude OAuth token'ı | Hub token'a hiç dokunmaz; auth Claude Code'a ait. Ses/push anahtarları macOS Keychain'de |
+| Abonelik/kimlik bilgisi sızıntısı | Claude OAuth token'ı | Hub token'a hiç dokunmaz; auth Claude Code'a ait. Ses/push anahtarları macOS Keychain'de (Linux'ta libsecret keyring'inde, [ADR-0006](adr/0006-linux-hub.md)) |
 
 ## Risk seviyeleri (policy)
 

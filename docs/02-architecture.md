@@ -41,7 +41,7 @@
 ## Bileşenler
 
 ### Hub süreci (`apps/mac-agent`)
-- **Dil/çalışma ortamı:** TypeScript, Node 22+ (Agent SDK TS, MCP SDK, `ws`, Fastify). Tek süreç, launchd `KeepAlive` ile.
+- **Dil/çalışma ortamı:** TypeScript, Node 22+ (Agent SDK TS, MCP SDK, `ws`, Fastify). Tek süreç, launchd `KeepAlive` ile; Linux'ta systemd `--user` servisi (`Restart=always`). Hub host'u macOS veya Linux olabilir; OS'a özel parçalar `src/platform/` altında ([ADR-0006](adr/0006-linux-hub.md)).
 - **Durum deposu:** `~/.callmeclaude/state.json` (atomik yazım) + `audit/*.jsonl` + `logs/`.
 - **CLI:** `cmc setup | status | run | logs | call-me | doctor | panic`.
 
@@ -102,5 +102,5 @@ Aktif aramada yeni bir olay gelirse ayrı arama başlatılmaz; ses oturumuna "ar
 | Brain | Claude Agent SDK (kullanıcının login'i) | `claude -p` alt süreç | Araç tanımı, MCP, oturum yönetimi |
 | Ses | Gemini Live (MVP) + ElevenLabs Agents | Pipecat kaskad | Bkz. [ADR-0003](adr/0003-two-layer-voice.md) |
 | Ağ | Tailscale | WireGuard, Cloudflare Tunnel | Sıfır port açma, ücretsiz, mobil uygulaması var |
-| Mobil | Native Swift (iOS) — [ADR-0005](adr/0005-native-ios-app.md) | React Native | CallKit + PushKit + voice processing doğrudan; Android ileride Kotlin |
+| Mobil | Native Swift (iOS) — [ADR-0005](adr/0005-native-ios-app.md); native Kotlin (Android) — [ADR-0007](adr/0007-android-app.md) | React Native | CallKit + PushKit + voice processing doğrudan; Android'de FCM'siz, foreground service ile kalıcı WebSocket |
 | Depo | Atomik yazılan JSON (`state.json`, `devices.json`) + JSONL audit | SQLite | Bağımlılıksız; veri hacmi küçük |

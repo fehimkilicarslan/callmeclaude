@@ -22,6 +22,8 @@ Hub.calls ──(1) VoIP push──▶ APNs / FCM ──▶ Telefon (uygulama ka
 - Push payload'u minimal tutulur (sadece `callId`, kısa başlık); içerik Tailscale üzerinden Hub'dan çekilir.
 
 ### Android
+> **Güncelleme:** Android uygulaması FCM'siz modla yazıldı ([ADR-0007](adr/0007-android-app.md), [apps/android/README.md](../apps/android/README.md)): Firebase yok; foreground service hub'a kalıcı WebSocket tutar, arama self-managed `ConnectionService` ile çalar. Aşağıdaki FCM maddesi araştırma notu olarak duruyor.
+
 - **FCM high-priority data mesajı** (developer'ın kendi Firebase projesi) → `ConnectionService` (self-managed) + full-screen intent.
 - **FCM'siz mod:** Uygulama foreground service olarak Hub'a Tailscale üzerinden kalıcı WS tutar; Hub aramayı doğrudan bu kanaldan başlatır. Pil tüketimi biraz daha yüksek, ama Google servislerine bağımlılık yok.
 - Android 14+ full-screen intent izni ve pil optimizasyonu muafiyeti kurulumda istenir.
