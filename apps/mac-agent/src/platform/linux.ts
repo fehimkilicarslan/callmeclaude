@@ -1,4 +1,4 @@
-import { execFileSync, spawn } from 'node:child_process';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { accessSync, constants, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir, userInfo } from 'node:os';
 import { delimiter, dirname, join } from 'node:path';
@@ -15,22 +15,30 @@ import {
   selectComputerDriver,
   UINPUT_RISK,
   uinputSteps,
+  ydotoolTooOld,
+  ydotoolVersion,
   type ComputerDriver,
+  type YdotoolVersion,
 } from './computerUse.ts';
 
 const UNIT_NAME = `${SERVICE_LABEL}.service`;
 const UNIT_PATH = join(homedir(), '.config', 'systemd', 'user', UNIT_NAME);
 
-/** Is `bin` an executable somewhere on PATH? */
-export function onPath(bin: string, path = process.env.PATH ?? '') {
+/** Full path of `bin` on PATH, or undefined. */
+export function which(bin: string, path = process.env.PATH ?? '') {
   for (const dir of path.split(delimiter)) {
     if (!dir) continue;
     try {
       accessSync(join(dir, bin), constants.X_OK);
-      return true;
+      return join(dir, bin);
     } catch {}
   }
-  return false;
+  return undefined;
+}
+
+/** Is `bin` an executable somewhere on PATH? */
+export function onPath(bin: string, path = process.env.PATH ?? '') {
+  return which(bin, path) !== undefined;
 }
 
 /** Same idea as the launchd PATH: system bins, the user's ~/.local/bin, and the directory of the running node. */
@@ -83,8 +91,40 @@ export function parseConf(text: string) {
   return out;
 }
 
-/** The computer-use driver for this process's environment and PATH. */
-export const linuxComputerDriver = (env: NodeJS.ProcessEnv = process.env) => selectComputerDriver(env, (b) => onPath(b, env.PATH));
+/** Output of a short, read-only command (version/help/package query); '' when it fails. Never sends input. */
+function readOnly(cmd: string, args: string[], o: { stderr?: boolean } = {}) {
+  const r = spawnSync(cmd, args, { encoding: 'utf8', timeout: 3000, stdio: ['ignore', 'pipe', 'pipe'] });
+  if (r.error) return '';
+  if (!o.stderr) return r.status === 0 ? r.stdout : '';
+  return `${r.stdout ?? ''}${r.stderr ?? ''}`;
+}
+
+/**
+ * ydotool's version, or undefined when it is not on PATH. The package version is asked only when the binary
+ * is the distribution's (/usr/bin, /bin); a ydotool built into /usr/local/bin is judged by its own output.
+ * Only `--version` / `--help` are run: they print and exit, they never send input.
+ */
+export function probeYdotool(path = process.env.PATH ?? ''): YdotoolVersion | undefined {
+  const bin = which('ydotool', path);
+  if (!bin) return undefined;
+  let pkg = '';
+  if (/^\/(usr\/)?bin\//.test(bin)) {
+    const pm = packageManager(osRelease());
+    if (pm === 'pacman') pkg = readOnly('pacman', ['-Q', 'ydotool']);
+    else if (pm === 'apt') pkg = readOnly('dpkg-query', ['-W', '-f=${Version}', 'ydotool']);
+    else if (pm === 'dnf') pkg = readOnly('rpm', ['-q', '--qf', '%{VERSION}', 'ydotool']);
+  }
+  const cli = `${readOnly(bin, ['--version'], { stderr: true })}\n${readOnly(bin, ['--help'], { stderr: true })}`;
+  return ydotoolVersion({ pkg: pkg || undefined, cli });
+}
+
+/**
+ * The computer-use driver for this environment and PATH. A ydotool that is not 1.x counts as absent
+ * (its command line differs from the one the agent is told to use).
+ */
+export function linuxComputerDriver(env: NodeJS.ProcessEnv = process.env, ydotool: YdotoolVersion | undefined = probeYdotool(env.PATH)) {
+  return selectComputerDriver(env, (b) => (b === 'ydotool' ? !!ydotool?.supported && onPath(b, env.PATH) : onPath(b, env.PATH)));
+}
 
 /** Browser config dirs where Claude Code installs its Claude in Chrome native messaging host. */
 const BROWSER_DIRS = ['google-chrome', 'google-chrome-beta', 'chromium', 'microsoft-edge', 'BraveSoftware/Brave-Browser', 'vivaldi'];
@@ -329,7 +369,8 @@ export const linux: Platform = {
 
 /** Doctor checks for computer use: detect, report and advise only. Nothing here changes the system. */
 function computerUseChecks() {
-  const d = linuxComputerDriver();
+  const ydotool = probeYdotool();
+  const d = linuxComputerDriver(process.env, ydotool);
   const pm = packageManager(osRelease());
   const user = process.env.USER || userInfo().username;
   const checks: { name: string; fn: () => Promise<boolean | string> }[] = [
@@ -353,11 +394,16 @@ function computerUseChecks() {
           userUnit = true;
         } catch {}
         const installed = d.input === 'ydotool';
+        const tooOld = ydotool && !ydotool.supported ? ydotool : undefined;
         const uinput = canWrite('/dev/uinput');
         const sock = ydotoolSocket();
-        if (installed && uinput && sock) return `ready (ydotoold socket ${sock}). ${UINPUT_RISK.replace('once this is allowed', 'because it is allowed')}`;
-        const state = [`ydotool ${installed ? 'installed' : 'not installed'}`, `/dev/uinput ${uinput ? 'already writable' : 'not writable for ' + user}`, `ydotoold ${sock ? 'running' : 'not running'}`];
-        const steps = uinputSteps(pm, user, { installed, uinput, daemon: !!sock, userUnit });
+        if (installed && uinput && sock) return `ready (ydotool ${ydotool?.version ?? '1.x'}, ydotoold socket ${sock}). ${UINPUT_RISK.replace('once this is allowed', 'because it is allowed')}`;
+        const state = [
+          tooOld ? ydotoolTooOld(tooOld).split(';')[0] : `ydotool ${installed ? 'installed' : 'not installed'}`,
+          `/dev/uinput ${uinput ? 'already writable' : 'not writable for ' + user}`,
+          `ydotoold ${sock ? 'running' : 'not running'}`,
+        ];
+        const steps = uinputSteps(pm, user, { installed, uinput, daemon: !!sock, userUnit, tooOld });
         return `!${state.join(', ')}. One-time setup, run it yourself only if you want this:${ind(steps.map((x, i) => `${i + 1}. ${x}`))}${ind([UINPUT_RISK])}`;
       },
     });
