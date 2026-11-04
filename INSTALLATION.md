@@ -49,7 +49,7 @@ cmc setup
 
 - **Merges** CallMeClaude's HTTP hooks into `~/.claude/settings.json`. It backs the file up first (`settings.json.cmc-backup-*`) and never touches your other hooks. `cmc uninstall` removes only its own hooks.
 - Installs a **launchd agent** (`~/Library/LaunchAgents/dev.callmeclaude.hub.plist`) that starts at login and restarts if it crashes.
-- Creates `~/.callmeclaude/` (config, state, logs, audit). It starts in **desk mode**, so nothing is held and nobody gets called until you switch modes.
+- Creates `~/.callmeclaude/` (config, state, logs, audit). It starts in **away mode**: once a phone is paired, a session that finishes, gets stuck or asks for permission is held and your phone rings. Run `cmc mode desk` while you sit at the computer to only watch sessions without holding or calling.
 
 Check: `cmc status` lists your open Claude Code sessions (start one with `claude` in any folder).
 
