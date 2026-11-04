@@ -31,7 +31,7 @@ test('a ydotool that is not 1.x is ignored by driver selection', () => {
   // No binary on this PATH at all: absent whatever the probe says.
   assert.equal(linuxComputerDriver(KDE, { version: '1.0.4', major: 1, supported: true }).input, null);
   // Driver selection itself: the Linux `has` answers false for an old ydotool, so it is listed as missing.
-  const old = selectComputerDriver(KDE, (b) => b === 'spectacle');
+  const old = selectComputerDriver(KDE, (b) => ['spectacle', 'wl-copy', 'wl-paste'].includes(b));
   assert.equal(old.input, null);
   assert.deepEqual(old.missing, [{ tool: 'ydotool', purpose: 'input' }]);
 });
