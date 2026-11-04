@@ -1,0 +1,265 @@
+[
+  {
+    "name": "get_overview",
+    "description": "Short, current summary of all Claude Code sessions and pending decisions.",
+    "parametersJsonSchema": {
+      "type": "object",
+      "properties": {},
+      "required": []
+    }
+  },
+  {
+    "name": "get_session",
+    "description": "One session's details and its last message.",
+    "parametersJsonSchema": {
+      "type": "object",
+      "properties": {
+        "project": {
+          "type": "string",
+          "description": "Project name (approximate is fine)"
+        }
+      },
+      "required": [
+        "project"
+      ]
+    }
+  },
+  {
+    "name": "reply_to_session",
+    "description": "Pass the developer's instruction to a session (continue, do this, approved: submit it, etc.). Also resolves its pending question.",
+    "parametersJsonSchema": {
+      "type": "object",
+      "properties": {
+        "project": {
+          "type": "string",
+          "description": "Project name"
+        },
+        "instruction": {
+          "type": "string",
+          "description": "Clear instruction for the session, capturing the developer's intent"
+        },
+        "confirmed": {
+          "type": "boolean",
+          "description": "Did the developer EXPLICITLY confirm this action by voice? false if not."
+        }
+      },
+      "required": [
+        "project",
+        "instruction"
+      ]
+    }
+  },
+  {
+    "name": "answer_permission",
+    "description": "Answer a session's permission request (run a command, edit a file, etc.).",
+    "parametersJsonSchema": {
+      "type": "object",
+      "properties": {
+        "project": {
+          "type": "string",
+          "description": "Project name"
+        },
+        "approve": {
+          "type": "boolean",
+          "description": "true = allow, false = deny"
+        },
+        "note": {
+          "type": "string",
+          "description": "Optional note for the agent when denying"
+        },
+        "confirmed": {
+          "type": "boolean",
+          "description": "Did the developer EXPLICITLY confirm this action by voice? false if not."
+        }
+      },
+      "required": [
+        "project",
+        "approve"
+      ]
+    }
+  },
+  {
+    "name": "release_session",
+    "description": "Release a waiting session with no new instruction; it stops normally.",
+    "parametersJsonSchema": {
+      "type": "object",
+      "properties": {
+        "project": {
+          "type": "string",
+          "description": "Project name"
+        }
+      },
+      "required": [
+        "project"
+      ]
+    }
+  },
+  {
+    "name": "start_session",
+    "description": "Start a new Claude Code session in a project folder with a task.",
+    "parametersJsonSchema": {
+      "type": "object",
+      "properties": {
+        "project": {
+          "type": "string",
+          "description": "Project / folder name"
+        },
+        "task": {
+          "type": "string",
+          "description": "Clear task description"
+        },
+        "confirmed": {
+          "type": "boolean",
+          "description": "Did the developer EXPLICITLY confirm this action by voice? false if not."
+        }
+      },
+      "required": [
+        "project",
+        "task"
+      ]
+    }
+  },
+  {
+    "name": "computer_task",
+    "description": "Let the hub itself operate the Mac: click in the browser, submit a form, use an app. Can take a while; the result arrives later.",
+    "parametersJsonSchema": {
+      "type": "object",
+      "properties": {
+        "task": {
+          "type": "string",
+          "description": "Precise description of what to do"
+        },
+        "project": {
+          "type": "string",
+          "description": "Related project (optional)"
+        },
+        "confirmed": {
+          "type": "boolean",
+          "description": "Did the developer EXPLICITLY confirm this action by voice? false if not."
+        }
+      },
+      "required": [
+        "task"
+      ]
+    },
+    "behavior": "NON_BLOCKING"
+  },
+  {
+    "name": "ask_brain",
+    "description": "Answer a question by reading session transcripts and projects (what a session did, what the error was, which files changed). Can take a while.",
+    "parametersJsonSchema": {
+      "type": "object",
+      "properties": {
+        "question": {
+          "type": "string",
+          "description": "The question"
+        }
+      },
+      "required": [
+        "question"
+      ]
+    },
+    "behavior": "NON_BLOCKING"
+  },
+  {
+    "name": "stop",
+    "description": "Stop one session immediately, or all of them (\"all\" = panic).",
+    "parametersJsonSchema": {
+      "type": "object",
+      "properties": {
+        "target": {
+          "type": "string",
+          "description": "Project name or \"all\""
+        }
+      },
+      "required": [
+        "target"
+      ]
+    }
+  },
+  {
+    "name": "resume_hub",
+    "description": "Re-enable automatic actions after a panic/pause.",
+    "parametersJsonSchema": {
+      "type": "object",
+      "properties": {
+        "confirmed": {
+          "type": "boolean",
+          "description": "Did the developer EXPLICITLY confirm this action by voice? false if not."
+        }
+      },
+      "required": []
+    }
+  },
+  {
+    "name": "set_mode",
+    "description": "Change when the hub may call: desk (I'm at the computer, no calls), away, ride (riding, extra short), sleep (emergencies only).",
+    "parametersJsonSchema": {
+      "type": "object",
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": [
+            "desk",
+            "away",
+            "ride",
+            "sleep"
+          ]
+        }
+      },
+      "required": [
+        "mode"
+      ]
+    }
+  },
+  {
+    "name": "set_language",
+    "description": "Change the language you speak and write summaries in, from the next call on. Use a BCP-47 code such as en-US, tr-TR, de-DE, es-ES.",
+    "parametersJsonSchema": {
+      "type": "object",
+      "properties": {
+        "language": {
+          "type": "string",
+          "description": "BCP-47 language code"
+        }
+      },
+      "required": [
+        "language"
+      ]
+    }
+  },
+  {
+    "name": "auto_approve",
+    "description": "From now on, approve a specific permission in a project without asking (e.g. \"npm test\", \"Edit\").",
+    "parametersJsonSchema": {
+      "type": "object",
+      "properties": {
+        "project": {
+          "type": "string",
+          "description": "Project name"
+        },
+        "rule": {
+          "type": "string",
+          "description": "Command prefix (e.g. \"npm test\") or tool name (e.g. \"Edit\")"
+        },
+        "confirmed": {
+          "type": "boolean",
+          "description": "Did the developer EXPLICITLY confirm this action by voice? false if not."
+        }
+      },
+      "required": [
+        "project",
+        "rule"
+      ]
+    }
+  },
+  {
+    "name": "end_call",
+    "description": "Hang up after saying goodbye.",
+    "parametersJsonSchema": {
+      "type": "object",
+      "properties": {},
+      "required": []
+    }
+  }
+]

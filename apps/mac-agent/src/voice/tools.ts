@@ -3,7 +3,8 @@ import type { Hub } from '../hub.ts';
 import { askBrain, computerTask } from '../brain.ts';
 import { briefing } from './prompt.ts';
 import { audit, clip, redact } from '../util.ts';
-import { saveConfig, type Mode } from '../config.ts';
+import { saveConfig, voiceSessionMode, type Mode } from '../config.ts';
+import { platform, type Platform } from '../platform/index.ts';
 
 const str = (description: string) => ({ type: 'string', description });
 const bool = (description: string) => ({ type: 'boolean', description });
@@ -14,7 +15,8 @@ const CONFIRMED = bool('Did the developer EXPLICITLY confirm this action by voic
 /** Long-running tools run asynchronously; the model keeps talking and the result arrives later. */
 export const LONG_TOOLS = new Set(['computer_task', 'ask_brain']);
 
-export const declarations: FunctionDeclaration[] = [
+/** Tool declarations for the voice model; only the computer's name depends on the platform. */
+export const declarationsFor = (p: Pick<Platform, 'words'>): FunctionDeclaration[] => [
   { name: 'get_overview', description: 'Short, current summary of all Claude Code sessions and pending decisions.', parametersJsonSchema: obj({}) },
   { name: 'get_session', description: "One session's details and its last message.", parametersJsonSchema: obj({ project: str('Project name (approximate is fine)') }, ['project']) },
   {
@@ -41,7 +43,7 @@ export const declarations: FunctionDeclaration[] = [
   },
   {
     name: 'computer_task',
-    description: 'Let the hub itself operate the Mac: click in the browser, submit a form, use an app. Can take a while; the result arrives later.',
+    description: `Let the hub itself operate ${p.words.the}: click in the browser, submit a form, use an app. Can take a while; the result arrives later.`,
     parametersJsonSchema: obj({ task: str('Precise description of what to do'), project: str('Related project (optional)'), confirmed: CONFIRMED }, ['task']),
     behavior: Behavior.NON_BLOCKING,
   },
@@ -70,6 +72,17 @@ export const declarations: FunctionDeclaration[] = [
   },
   { name: 'end_call', description: 'Hang up after saying goodbye.', parametersJsonSchema: obj({}) },
 ];
+
+export const declarations = declarationsFor(platform);
+
+/**
+ * start_session's reply. tmux mode keeps the `tmux` field (the session's tmux name) exactly as before;
+ * headless mode returns the Claude Code session id under its own name instead of pretending it is a tmux name.
+ */
+export function startSessionReply(mode: 'tmux' | 'headless', dir: string, started: string) {
+  const say = "Session started. I'll call when it's done or stuck.";
+  return mode === 'headless' ? { ok: true, dir, mode: 'headless', session_id: started, say } : { ok: true, dir, tmux: started, say };
+}
 
 const HIGH_RISK =
   /(deploy|publish|push|pay|payment|purchase|buy|delete|drop|remove|send .*(mail|email|message)|production|prod\b|yayınla|ödeme|öde|satın|sil|gönder.*(mail|e-posta|mesaj))/i;
@@ -119,8 +132,8 @@ export async function runTool(hub: Hub, name: string, args: any, ctx: { endCall:
       if (!args.confirmed) return needConfirm(`start a new session in ${args.project}: ${args.task}`);
       const dir = hub.controller.findProjectDir(args.project);
       if (!dir) return { error: 'Project folder not found.', roots: hub.cfg.projectRoots };
-      const tmux = await hub.controller.startSession(dir, args.task);
-      return { ok: true, dir, tmux, say: "Session started. I'll call when it's done or stuck." };
+      const started = await hub.controller.startSession(dir, args.task);
+      return startSessionReply(voiceSessionMode(hub.cfg), dir, started);
     }
     case 'computer_task': {
       if (!args.confirmed) return needConfirm(args.task);

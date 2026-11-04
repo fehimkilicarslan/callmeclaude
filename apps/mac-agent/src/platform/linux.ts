@@ -1,11 +1,22 @@
 import { execFileSync, spawn } from 'node:child_process';
-import { accessSync, constants, existsSync, mkdirSync, readdirSync, unlinkSync, writeFileSync } from 'node:fs';
-import { homedir, userInfo } from 'node:os';
+import { accessSync, constants, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
+import { homedir, tmpdir, userInfo } from 'node:os';
 import { delimiter, dirname, join } from 'node:path';
 import { LOG_DIR } from '../config.ts';
 import { execFileP } from '../util.ts';
 import { binPath, SERVICE_LABEL } from './common.ts';
 import { SecretStoreError, type Platform } from './types.ts';
+import {
+  envSummary,
+  installCommand,
+  LINUX_EXTRA_RULES,
+  linuxToolsBlock,
+  packageManager,
+  selectComputerDriver,
+  UINPUT_RISK,
+  uinputSteps,
+  type ComputerDriver,
+} from './computerUse.ts';
 
 const UNIT_NAME = `${SERVICE_LABEL}.service`;
 const UNIT_PATH = join(homedir(), '.config', 'systemd', 'user', UNIT_NAME);
@@ -67,6 +78,61 @@ export function parseConf(text: string) {
   const out: Record<string, string> = {};
   for (const line of text.split('\n')) {
     const m = line.match(/^\s*([A-Za-z]+)\s*=\s*(.*?)\s*$/);
+    if (m) out[m[1]] = m[2];
+  }
+  return out;
+}
+
+/** The computer-use driver for this process's environment and PATH. */
+export const linuxComputerDriver = (env: NodeJS.ProcessEnv = process.env) => selectComputerDriver(env, (b) => onPath(b, env.PATH));
+
+/** Browser config dirs where Claude Code installs its Claude in Chrome native messaging host. */
+const BROWSER_DIRS = ['google-chrome', 'google-chrome-beta', 'chromium', 'microsoft-edge', 'BraveSoftware/Brave-Browser', 'vivaldi'];
+const CHROME_HOST = 'com.anthropic.claude_code_browser_extension.json';
+
+/** Browsers that have the Claude in Chrome native host installed (set up by `claude --chrome` / `/chrome`). */
+export function chromeHosts(home = homedir()) {
+  return BROWSER_DIRS.filter((d) => existsSync(join(home, '.config', d, 'NativeMessagingHosts', CHROME_HOST)));
+}
+
+function osRelease() {
+  try {
+    return readFileSync('/etc/os-release', 'utf8');
+  } catch {
+    return '';
+  }
+}
+
+/** ydotoold's socket: $YDOTOOL_SOCKET, else the 1.x default in $XDG_RUNTIME_DIR, else the old /tmp one. */
+function ydotoolSocket(env = process.env) {
+  const c = [env.YDOTOOL_SOCKET, env.XDG_RUNTIME_DIR && join(env.XDG_RUNTIME_DIR, '.ydotool_socket'), '/tmp/.ydotool_socket'].filter(Boolean) as string[];
+  return c.find((p) => existsSync(p));
+}
+
+const canWrite = (p: string) => {
+  try {
+    accessSync(p, constants.R_OK | constants.W_OK);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+const ind = (lines: string[]) => lines.map((l) => `\n      ${l}`).join('');
+
+function driverReport(d: ComputerDriver) {
+  if (d.env.session === 'none') return `!${d.notes.join(' ')}`;
+  const parts = [`${d.id}: screenshot ${d.screenshot ?? '—'}, input ${d.input ?? '—'}`];
+  if (!d.desktop) return `!${parts[0]}. ${d.notes.join(' ')}`;
+  if (!d.input) return `!${parts[0]}. Look-only: no mouse/keyboard tool${d.env.session === 'wayland' ? ' (ydotool, see below)' : ''}.`;
+  return parts[0];
+}
+
+/** Parse `systemctl --user show-environment` output (NAME=value lines). */
+export function parseEnvBlock(text: string) {
+  const out: Record<string, string> = {};
+  for (const line of text.split('\n')) {
+    const m = line.match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/);
     if (m) out[m[1]] = m[2];
   }
   return out;
@@ -179,7 +245,39 @@ export const linux: Platform = {
           : `!HandleLidSwitch=${battery}, HandleLidSwitchExternalPower=${ac} → keep the lid open, or set both to ignore in /etc/systemd/logind.conf.d/`;
       },
     },
+    ...computerUseChecks(),
   ],
+
+  async computerUse({ useChrome }) {
+    const d = linuxComputerDriver();
+    const browser = useChrome && chromeHosts().length > 0;
+    if (!d.desktop && !browser) {
+      return {
+        driver: d.id,
+        subject: 'computer',
+        toolsBlock: '',
+        extraRules: [],
+        mcpServers: {},
+        usable: false,
+        unsupported: `Operating this computer is not supported in this environment (${envSummary(d.env)}): ${d.notes.join(' ')} The Claude in Chrome browser tools are not set up either. Run cmc doctor on the computer for the steps.`,
+        cleanup() {},
+      };
+    }
+    // Private per-task directory for screenshots (0700); removed when the task ends, whatever the agent did.
+    const shotDir = d.desktop ? mkdtempSync(join(tmpdir(), 'cmc-screen-')) : '';
+    return {
+      driver: d.id,
+      subject: 'computer',
+      toolsBlock: linuxToolsBlock(d, { shotDir, browser }),
+      extraRules: LINUX_EXTRA_RULES,
+      mcpServers: {},
+      usable: true,
+      cleanup() {
+        if (shotDir) rmSync(shotDir, { recursive: true, force: true });
+      },
+    };
+  },
+  words: { owners: "the developer's computer", the: 'this computer', this: 'this computer' },
 
   shellExec: (command, opts) => execFileP(linuxShell(), ['-lc', command], { ...opts, encoding: 'utf8' }),
   servicePath: () => linuxServicePath(homedir(), process.execPath),
@@ -220,7 +318,67 @@ export const linux: Platform = {
       shell: linuxShell(),
       display: process.env.WAYLAND_DISPLAY ? `wayland (${process.env.WAYLAND_DISPLAY})` : process.env.DISPLAY ? `x11 (${process.env.DISPLAY})` : 'none',
       secretTool: onPath('secret-tool') ? 'found' : 'missing',
-      computerUse: 'not available on Linux yet',
+      computerUse: (() => {
+        const d = linuxComputerDriver();
+        return `${d.id} (${envSummary(d.env)}): screenshot ${d.screenshot ?? 'none'}, input ${d.input ?? 'none'}`;
+      })(),
+      chrome: chromeHosts().join(', ') || 'native host not installed',
     };
   },
 };
+
+/** Doctor checks for computer use: detect, report and advise only. Nothing here changes the system. */
+function computerUseChecks() {
+  const d = linuxComputerDriver();
+  const pm = packageManager(osRelease());
+  const user = process.env.USER || userInfo().username;
+  const checks: { name: string; fn: () => Promise<boolean | string> }[] = [
+    { name: 'Computer use: desktop session', fn: async () => (d.env.session === 'none' ? `!${d.notes[0]}` : envSummary(d.env)) },
+    { name: 'Computer use: driver', fn: async () => driverReport(d) },
+  ];
+  const needed = d.missing.filter((m) => m.tool !== 'ydotool');
+  if (needed.length) {
+    checks.push({
+      name: 'Computer use: missing tools',
+      fn: async () => `!${needed.map((m) => `${m.tool} (${m.purpose})`).join(', ')} → ${installCommand(pm, needed.map((m) => m.tool))}`,
+    });
+  }
+  if (d.env.session === 'wayland') {
+    checks.push({
+      name: 'Computer use: ydotool (optional, Wayland mouse/keyboard)',
+      fn: async () => {
+        let userUnit = false;
+        try {
+          await execFileP('systemctl', ['--user', 'cat', 'ydotool.service']);
+          userUnit = true;
+        } catch {}
+        const installed = d.input === 'ydotool';
+        const uinput = canWrite('/dev/uinput');
+        const sock = ydotoolSocket();
+        if (installed && uinput && sock) return `ready (ydotoold socket ${sock}). ${UINPUT_RISK.replace('once this is allowed', 'because it is allowed')}`;
+        const state = [`ydotool ${installed ? 'installed' : 'not installed'}`, `/dev/uinput ${uinput ? 'already writable' : 'not writable for ' + user}`, `ydotoold ${sock ? 'running' : 'not running'}`];
+        const steps = uinputSteps(pm, user, { installed, uinput, daemon: !!sock, userUnit });
+        return `!${state.join(', ')}. One-time setup, run it yourself only if you want this:${ind(steps.map((x, i) => `${i + 1}. ${x}`))}${ind([UINPUT_RISK])}`;
+      },
+    });
+  }
+  checks.push({
+    name: 'Computer use: hub service sees the desktop',
+    fn: async () => {
+      const { stdout } = await execFileP('systemctl', ['--user', 'show-environment']);
+      const env = parseEnvBlock(stdout);
+      const vars = ['WAYLAND_DISPLAY', 'DISPLAY', 'XDG_SESSION_TYPE', 'XDG_CURRENT_DESKTOP'];
+      const svc = selectComputerDriver(Object.fromEntries(vars.map((v) => [v, env[v]])), (b) => onPath(b));
+      if (svc.id === d.id) return `${svc.id}`;
+      return `!service environment gives "${svc.id}" (this shell: "${d.id}") → systemctl --user import-environment ${vars.join(' ')}, then cmc restart`;
+    },
+  });
+  checks.push({
+    name: 'Computer use: browser (Claude in Chrome)',
+    fn: async () => {
+      const found = chromeHosts();
+      return found.length ? `native host installed for ${found.join(', ')}` : '!not set up → install the Claude in Chrome extension and run `claude --chrome` once';
+    },
+  });
+  return checks;
+}

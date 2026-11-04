@@ -30,6 +30,34 @@ export interface ServiceManager {
   restart(): Promise<void>;
 }
 
+/** How the computer task's agent operates this machine (see brain.ts). */
+export interface ComputerUsePlan {
+  /** Driver id: 'peekaboo' on macOS (even when Peekaboo is missing: the Bash fallbacks are part of it), a Linux driver id, or 'none'. */
+  driver: string;
+  /** "Mac" / "computer": completes "you operate the developer's …". */
+  subject: string;
+  /** The "Tools (prefer them in this order): …" block of the system prompt. */
+  toolsBlock: string;
+  /** Rules appended after the shared ones (none on macOS). */
+  extraRules: string[];
+  mcpServers: Record<string, any>;
+  /** false when nothing at all can operate this machine: the task is refused with `unsupported`. */
+  usable: boolean;
+  unsupported?: string;
+  /** Called when the task ends (removes the Linux screenshot directory). */
+  cleanup(): void;
+}
+
+/** Wording that names this machine in user- and model-facing texts. */
+export interface MachineWords {
+  /** "the developer's Mac" / "the developer's computer" */
+  owners: string;
+  /** "the Mac" / "this computer" */
+  the: string;
+  /** "this Mac" / "this computer" */
+  this: string;
+}
+
 export interface Platform {
   id: 'darwin' | 'linux';
   secrets: SecretStore;
@@ -52,6 +80,9 @@ export interface Platform {
     /** Alternatives joined into one case-insensitive DESTRUCTIVE regex. */
     destructive: string[];
   };
+  /** How a computer task operates this machine. `useChrome` = the hub passes --chrome to the agent. */
+  computerUse(o: { useChrome: boolean }): Promise<ComputerUsePlan>;
+  words: MachineWords;
   /** Diagnostics returned by the hub's /control/permissions endpoint. */
   diagnostics(): Promise<Record<string, string>>;
 }

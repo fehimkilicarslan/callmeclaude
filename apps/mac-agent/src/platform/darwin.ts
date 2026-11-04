@@ -38,6 +38,23 @@ export function darwinPlist(o: { node: string; bin: string; path: string; home: 
 `;
 }
 
+let peekabooPath: string | null | undefined;
+async function peekaboo() {
+  if (peekabooPath !== undefined) return peekabooPath;
+  try {
+    peekabooPath = (await zsh('command -v peekaboo')).stdout.trim() || null;
+  } catch {
+    peekabooPath = null;
+  }
+  return peekabooPath;
+}
+
+/** The computer task's tool instructions on macOS (moved verbatim from brain.ts). */
+export const DARWIN_TOOLS_BLOCK = `Tools (prefer them in this order):
+- For the desktop and apps, use the Peekaboo MCP first (mcp__peekaboo__*): "see"/"image" to look at the screen (with window and element ids), then "click", "type", "hotkey", "app", "window", "scroll". Peekaboo has its own screen and accessibility permissions; the hub service has none.
+- For a web page you may also use the Claude in Chrome tools (mcp__claude-in-chrome__*) if they are available: find the tab, read the page, click, fill forms.
+- Use Bash fallbacks such as "screencapture", "osascript" or "cliclick" only if Peekaboo is missing. In the service context they may return an empty or wallpaper-only image: do not read that as "the screen is empty".`;
+
 const zsh = (command: string, opts?: { timeout?: number }) => execFileP('/bin/zsh', ['-lc', command], { ...opts, encoding: 'utf8' });
 
 export const darwin: Platform = {
@@ -120,6 +137,14 @@ export const darwin: Platform = {
       },
     },
   ],
+
+  async computerUse() {
+    const pk = await peekaboo();
+    const mcpServers: Record<string, any> = {};
+    if (pk) mcpServers.peekaboo = { type: 'stdio', command: pk, args: ['mcp', '--allow-foreground'] };
+    return { driver: 'peekaboo', subject: 'Mac', toolsBlock: DARWIN_TOOLS_BLOCK, extraRules: [], mcpServers, usable: true, cleanup() {} };
+  },
+  words: { owners: "the developer's Mac", the: 'the Mac', this: 'this Mac' },
 
   shellExec: zsh,
   servicePath: () => darwinServicePath(),

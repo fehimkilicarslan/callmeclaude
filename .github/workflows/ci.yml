@@ -28,8 +28,13 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - name: Install the X11 computer-use tools (Xvfb, xdotool, scrot)
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends xvfb xdotool scrot
       - run: pnpm --filter @callmeclaude/mac-agent typecheck
       - run: pnpm --filter @callmeclaude/mac-agent test
+        env:
+          # test/x11-driver.test.ts starts its own Xvfb; here a missing tool fails instead of skipping.
+          CMC_REQUIRE_X11: '1'
 
   ios:
     runs-on: macos-latest
