@@ -19,7 +19,12 @@ export interface SecretStore {
   set(service: string, account: string, value: string): void;
   /** Delete; never throws. */
   delete(service: string, account: string): void;
+  /** Linux only: after get() returned nothing, why (see classifySecretLookup). Absent on macOS. */
+  diagnose?(service: string, account: string): SecretState;
 }
+
+/** Why a secret could not be read: not stored, keyring locked, no Secret Service reachable, or cannot tell. */
+export type SecretState = 'found' | 'missing' | 'locked' | 'unreachable' | 'unknown';
 
 export interface ServiceManager {
   /** Shown to the user, e.g. "launchd". */
