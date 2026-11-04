@@ -1,6 +1,10 @@
 package dev.callmeclaude.ui
 
+import android.Manifest
+import android.content.pm.PackageManager
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -43,6 +47,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -51,19 +56,22 @@ import dev.callmeclaude.Decision
 import dev.callmeclaude.HubClient
 import dev.callmeclaude.PendingCard
 import dev.callmeclaude.SessionCard
+import dev.callmeclaude.calls.CallManager
 
 @Composable
-fun App(hub: HubClient) {
+fun App(hub: HubClient, calls: CallManager) {
     CmcTheme {
         val pairing by hub.pairing.collectAsStateWithLifecycle()
+        val call by calls.ui.collectAsStateWithLifecycle()
         var showSettings by rememberSaveable { mutableStateOf(false) }
         when {
+            call != null -> CallScreen(calls)
             pairing == null -> PairingScreen(hub)
             showSettings -> {
                 BackHandler { showSettings = false }
                 SettingsScreen(hub, onDone = { showSettings = false })
             }
-            else -> HomeScreen(hub, onSettings = { showSettings = true })
+            else -> HomeScreen(hub, calls, onSettings = { showSettings = true })
         }
     }
 }
@@ -81,13 +89,23 @@ private val modes = listOf(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun HomeScreen(hub: HubClient, onSettings: () -> Unit) {
+private fun HomeScreen(hub: HubClient, calls: CallManager, onSettings: () -> Unit) {
     val connected by hub.connected.collectAsStateWithLifecycle()
     val snapshot by hub.snapshot.collectAsStateWithLifecycle()
     val status by hub.status.collectAsStateWithLifecycle()
     val pairing by hub.pairing.collectAsStateWithLifecycle()
     var confirmPanic by remember { mutableStateOf(false) }
     var refreshing by remember { mutableStateOf(false) }
+
+    AskCallPermissionsOnce()
+    val context = LocalContext.current
+    // "Call Claude" needs the microphone; ask first if it's missing, then place the call anyway
+    // (without it the hub still gets silence frames and the call stays up).
+    val micLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { calls.placeCall() }
+    val placeCall = {
+        if (context.checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) calls.placeCall()
+        else micLauncher.launch(Manifest.permission.RECORD_AUDIO)
+    }
 
     val sessions = snapshot?.sessions.orEmpty()
     val pending = snapshot?.pending.orEmpty()
@@ -122,6 +140,7 @@ private fun HomeScreen(hub: HubClient, onSettings: () -> Unit) {
                         text = if (connected) "Connected to ${pairing?.name ?: "computer"}" else status,
                     )
                 }
+                item { CallHero(onCall = placeCall, enabled = pairing != null) }
                 item { ModePicker(current = snapshot?.mode ?: "away", onPick = hub::setMode) }
                 if (paused) item { PausedBanner(onResume = hub::resume) }
                 if (pending.isNotEmpty()) {

@@ -7,6 +7,18 @@
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-feature android:name="android.hardware.camera.any" android:required="false" />
 
+    <!-- Hub connection kept in a foreground service (see HubService). -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+
+    <!-- Calls: self-managed ConnectionService, lock-screen ringing, call-time FGS types. -->
+    <uses-permission android:name="android.permission.MANAGE_OWN_CALLS" />
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_PHONE_CALL" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+
     <!-- The pairing token must not leave the device: no cloud backup, no device-to-device transfer. -->
     <application
         android:name=".CallMeClaudeApp"
@@ -30,6 +42,42 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!--
+            Holds the WebSocket to the paired computer so it can ring this phone. There is no push
+            service on Android: the hub announces calls over this socket. Idle it runs as specialUse,
+            during a call as specialUse|phoneCall|microphone.
+        -->
+        <service
+            android:name=".HubService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse|phoneCall|microphone">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Keeps a WebSocket open to the user's own paired computer so it can ring this phone when a Claude Code session needs the user. No push service is used." />
+        </service>
+
+        <service
+            android:name=".calls.CmcConnectionService"
+            android:exported="true"
+            android:permission="android.permission.BIND_TELECOM_CONNECTION_SERVICE">
+            <intent-filter>
+                <action android:name="android.telecom.ConnectionService" />
+            </intent-filter>
+        </service>
+
+        <activity
+            android:name=".calls.CallActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:launchMode="singleTop"
+            android:showWhenLocked="true"
+            android:taskAffinity="dev.callmeclaude.call"
+            android:turnScreenOn="true" />
+
+        <receiver
+            android:name=".calls.CallActionReceiver"
+            android:exported="false" />
 
         <!-- ZXing's scanner defaults to landscape; follow the device instead. -->
         <activity
