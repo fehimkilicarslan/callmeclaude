@@ -102,6 +102,10 @@ class CallManager(
     }
 
     private fun registerAccount() {
+        // CAPABILITY_SELF_MANAGED is deprecated in API 37 in favour of the transactional VoIP API
+        // (TelecomManager.addCall, API 34+) or the Core Telecom Jetpack library. Neither fits:
+        // minSdk is 29, and the project adds no dependencies. It still works on API 37.
+        @Suppress("DEPRECATION")
         val account = PhoneAccount.builder(accountHandle, "CallMeClaude")
             .setCapabilities(PhoneAccount.CAPABILITY_SELF_MANAGED)
             .addSupportedUriScheme(PhoneAccount.SCHEME_SIP)
