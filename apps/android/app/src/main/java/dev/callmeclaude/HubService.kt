@@ -13,6 +13,7 @@ import android.os.IBinder
 import android.util.Log
 import dev.callmeclaude.calls.CallManager
 import dev.callmeclaude.calls.CallNotifications
+import dev.callmeclaude.ui.hasLocalNetworkPermission
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -128,10 +129,16 @@ class HubService : Service() {
             Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
+        val access = localNetworkAccess(Build.VERSION.SDK_INT, hasLocalNetworkPermission(this), blockedAfterRequest = false)
+        val (title, text) = when (val view = connectionView(connected, status, name ?: "your computer", access)) {
+            is ConnectionView.Connected -> "Connected to ${view.name}" to "Claude can call you."
+            is ConnectionView.Offline -> view.status to "Claude can't call you until this reconnects."
+            is ConnectionView.NeedsLocalNetwork -> "Local network access needed" to LOCAL_NETWORK_RATIONALE
+        }
         val b = Notification.Builder(this, CHANNEL_STATUS)
             .setSmallIcon(R.drawable.ic_stat_claude)
-            .setContentTitle(if (connected) "Connected to ${name ?: "your computer"}" else status)
-            .setContentText(if (connected) "Claude can call you." else "Claude can't call you until this reconnects.")
+            .setContentTitle(title)
+            .setContentText(text)
             .setContentIntent(open)
             .setOngoing(true)
             .setShowWhen(false)
