@@ -52,11 +52,15 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import dev.callmeclaude.ACCESS_LOCAL_NETWORK
+import dev.callmeclaude.ConnectionView
 import dev.callmeclaude.Decision
+import dev.callmeclaude.LOCAL_NETWORK_RATIONALE
 import dev.callmeclaude.HubClient
 import dev.callmeclaude.PendingCard
 import dev.callmeclaude.SessionCard
 import dev.callmeclaude.calls.CallManager
+import dev.callmeclaude.connectionView
 
 @Composable
 fun App(hub: HubClient, calls: CallManager) {
@@ -97,7 +101,8 @@ private fun HomeScreen(hub: HubClient, calls: CallManager, onSettings: () -> Uni
     var confirmPanic by remember { mutableStateOf(false) }
     var refreshing by remember { mutableStateOf(false) }
 
-    AskCallPermissionsOnce()
+    val localNetwork = rememberLocalNetworkState(recheckKey = status, onGranted = { hub.ensureConnected() })
+    AskCallPermissionsOnce { results -> results[ACCESS_LOCAL_NETWORK]?.let(localNetwork.onResult) }
     val context = LocalContext.current
     // "Call Claude" needs the microphone; ask first if it's missing, then place the call anyway
     // (without it the hub still gets silence frames and the call stays up).
@@ -135,10 +140,15 @@ private fun HomeScreen(hub: HubClient, calls: CallManager, onSettings: () -> Uni
                 modifier = Modifier.fillMaxSize(),
             ) {
                 item {
-                    ConnectionPill(
-                        connected = connected,
-                        text = if (connected) "Connected to ${pairing?.name ?: "computer"}" else status,
-                    )
+                    when (val view = connectionView(connected, status, pairing?.name, localNetwork.access)) {
+                        is ConnectionView.Connected -> ConnectionPill(connected = true, text = "Connected to ${view.name}")
+                        is ConnectionView.Offline -> ConnectionPill(connected = false, text = view.status)
+                        is ConnectionView.NeedsLocalNetwork -> LocalNetworkCard(
+                            canAsk = view.canAsk,
+                            onAllow = localNetwork.request,
+                            onSettings = { openAppSettings(context) },
+                        )
+                    }
                 }
                 item { CallHero(onCall = placeCall, enabled = pairing != null) }
                 item { ModePicker(current = snapshot?.mode ?: "away", onPick = hub::setMode) }
@@ -216,6 +226,26 @@ private fun ConnectionPill(connected: Boolean, text: String) {
         Dot(if (connected) Palette.green else Palette.red, 8)
         Spacer(Modifier.width(8.dp))
         Text(text, style = MaterialTheme.typography.labelLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    }
+}
+
+@Composable
+private fun LocalNetworkCard(canAsk: Boolean, onAllow: () -> Unit, onSettings: () -> Unit) {
+    Card(tint = Palette.orange) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Dot(Palette.orange, 8)
+            Spacer(Modifier.width(8.dp))
+            Text("Local network access needed", style = MaterialTheme.typography.titleSmall)
+        }
+        Text(
+            LOCAL_NETWORK_RATIONALE + if (canAsk) "" else " Turn on Nearby devices in the app settings.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            if (canAsk) Button(onClick = onAllow) { Text("Allow") }
+            OutlinedButton(onClick = onSettings) { Text("Open settings") }
+        }
     }
 }
 
