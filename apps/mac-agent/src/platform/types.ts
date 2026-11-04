@@ -1,7 +1,10 @@
 /** Everything the hub does differently per operating system lives behind this interface. */
 
-export type DoctorResult = boolean | string;
-/** A doctor check: `true`/plain string = ok, `false`/string starting with "!" = problem (same convention as index.ts). */
+export type DoctorResult = boolean | string | { info: string };
+/**
+ * A doctor check: `true`/plain string = ok, `false`/string starting with "!" = problem, `{ info }` = neither:
+ * a note about something optional on this OS (see doctorLine in cliTexts.ts).
+ */
 export interface DoctorCheck {
   name: string;
   fn: () => Promise<DoctorResult>;

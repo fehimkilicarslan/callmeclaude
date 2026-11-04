@@ -12,10 +12,11 @@ import { CONFIG_PATH, LOG_DIR, loadConfig, parseVoiceSessionsAnswer, planVoiceSe
 import { getSecret, setSecret } from './secrets.ts';
 import { hooksInstalled, installHooks, installService, restartService, uninstallHooks, uninstallService, SERVICE } from './install.ts';
 import { platform, SecretStoreError } from './platform/index.ts';
+import type { DoctorResult } from './platform/types.ts';
 import { onPath } from './platform/linux.ts';
 import { execFileP } from './util.ts';
 import { apnsConfigured, apnsTexts } from './apns.ts';
-import { pairTexts } from './cliTexts.ts';
+import { doctorLine, pairTexts, voipTokenTexts } from './cliTexts.ts';
 
 const [cmd = 'help', ...rest] = process.argv.slice(2);
 const flags = parseFlags(rest);
@@ -36,8 +37,6 @@ function parseFlags(a: string[]) {
   (f as any)._ = pos;
   return f as Record<string, string | true> & { _: string[] };
 }
-
-const ok = (b: boolean) => (b ? '✅' : '❌');
 
 async function api(path: string, body?: object) {
   const cfg = loadConfig();
@@ -309,10 +308,9 @@ async function main() {
 
 async function doctor() {
   const cfg = loadConfig();
-  const check = async (name: string, fn: () => Promise<boolean | string>) => {
+  const check = async (name: string, fn: () => Promise<DoctorResult>) => {
     try {
-      const r = await fn();
-      console.log(`${ok(r === true || (typeof r === 'string' && !r.startsWith('!')))} ${name}${typeof r === 'string' ? ': ' + r.replace(/^!/, '') : ''}`);
+      console.log(doctorLine(name, await fn()));
     } catch (e) {
       console.log(`❌ ${name}: ${(e as Error).message}`);
     }
@@ -330,11 +328,10 @@ async function doctor() {
   await check('Gemini API key', async () => !!getSecret('gemini-api-key'));
   const apns = apnsTexts(platform.id);
   await check(apns.doctorName, async () => (apnsConfigured(cfg) ? `${cfg.apns.environment}` : apns.doctorMissing));
-  await check('Phone registered (VoIP token)', async () => {
+  const voip = voipTokenTexts(platform.id);
+  await check(voip.doctorName, async () => {
     const p = join(CONFIG_PATH, '..', 'devices.json');
-    if (!existsSync(p)) return '!not paired yet';
-    const d = JSON.parse(readFileSync(p, 'utf8'));
-    return Object.values(d).some((x: any) => x.voipToken) ? Object.keys(d).join(', ') : '!no token yet';
+    return voip.result(existsSync(p) ? JSON.parse(readFileSync(p, 'utf8')) : undefined);
   });
   await check('Tailscale', async () => {
     const t = await tailscaleInfo();

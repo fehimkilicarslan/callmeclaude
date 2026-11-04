@@ -18,6 +18,8 @@ test('Linux APNs texts: only iPhones need APNs to ring in the background, Androi
   assert.ok(t.setupMissing.endsWith(': cmc setup --apns-key-file AuthKey_XXX.p8 --apns-key-id XXX --team-id XXX --bundle-id XXX'));
   assert.ok(!t.setupMissing.includes('the hub can only ring the phone'));
   assert.equal(t.doctorName, 'APNs (hub can ring an iPhone in the background)');
-  assert.ok(t.doctorMissing.startsWith('!not configured'));
-  assert.match(t.doctorMissing, /Android app is not affected/);
+  // A note, not a problem: doctor shows it with ℹ️ instead of ❌.
+  assert.deepEqual(t.doctorMissing, {
+    info: 'not configured: needed only to ring an iPhone in the background (the Android app is not affected)',
+  });
 });
