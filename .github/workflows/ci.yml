@@ -28,8 +28,8 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - name: Install the X11 computer-use tools (Xvfb, xdotool, scrot)
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends xvfb xdotool scrot
+      - name: Install the X11 computer-use tools (Xvfb, xdotool, scrot; xclip and zenity for the paste test)
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends xvfb xdotool scrot xclip zenity dbus-daemon
       - run: pnpm --filter @callmeclaude/mac-agent typecheck
       - run: pnpm --filter @callmeclaude/mac-agent test
         env:

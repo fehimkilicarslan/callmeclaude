@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from '
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
+import { projectRootCandidates } from './platform/projectRoots.ts';
 
 export const DATA_DIR = process.env.CMC_HOME ?? join(homedir(), '.callmeclaude');
 export const CONFIG_PATH = join(DATA_DIR, 'config.json');
@@ -60,10 +61,9 @@ export interface Config {
   voiceSessions?: VoiceSessions;
 }
 
-function defaultRoots(): string[] {
-  const h = homedir();
-  return ['Desktop/Projeler', 'Projects', 'Projeler', 'code', 'dev', 'src', 'Developer']
-    .map((p) => join(h, p))
+export function defaultRoots(os: NodeJS.Platform = process.platform, home = homedir()): string[] {
+  return projectRootCandidates(os)
+    .map((p) => join(home, p))
     .filter((p) => existsSync(p));
 }
 

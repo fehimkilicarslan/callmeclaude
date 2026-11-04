@@ -30,7 +30,7 @@ export function apnsTexts(os: NodeJS.Platform): { setupMissing: string; doctorNa
       setupMissing: `⚠️  APNs not configured (an iPhone rings only while the CallMeClaude app is open; the Android app is not affected, it rings in the background over its own connection): ${APNS_FLAGS}`,
       doctorName: 'APNs (hub can ring an iPhone in the background)',
       // Not a problem on Linux: only an iPhone needs APNs, so doctor shows a note instead of ❌.
-      doctorMissing: { info: 'not configured: needed only to ring an iPhone in the background (the Android app is not affected)' },
+      doctorMissing: { info: 'not configured (the Android app does not need it)' },
     };
   }
   return {

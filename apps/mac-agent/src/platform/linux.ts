@@ -5,14 +5,15 @@ import { delimiter, dirname, join } from 'node:path';
 import { LOG_DIR } from '../config.ts';
 import { execFileP } from '../util.ts';
 import { binPath, SERVICE_LABEL } from './common.ts';
-import { SecretStoreError, type Platform } from './types.ts';
+import { SecretStoreError, type Platform, type SecretState } from './types.ts';
 import {
   desktopSessionEnv,
   envSummary,
   needsSessionEnv,
   SESSION_VARS,
+  blockedInput,
   installCommand,
-  LINUX_EXTRA_RULES,
+  linuxExtraRules,
   linuxToolsBlock,
   packageManager,
   selectComputerDriver,
@@ -25,6 +26,11 @@ import {
 } from './computerUse.ts';
 
 const UNIT_NAME = `${SERVICE_LABEL}.service`;
+
+const shq = (s: string) => (/^[\w@%+=:,./-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`);
+
+/** How the computer task's agent runs the hub's type-text helper (this node, this checkout's cmc). */
+export const typeTextCommand = () => `${shq(process.execPath)} ${shq(binPath())} type-text`;
 const UNIT_PATH = join(homedir(), '.config', 'systemd', 'user', UNIT_NAME);
 
 /** Full path of `bin` on PATH, or undefined. */
@@ -75,9 +81,38 @@ WantedBy=default.target
 `;
 }
 
-const SECRET_HELP = `Install secret-tool (Debian/Ubuntu: sudo apt install libsecret-tools · Fedora: sudo dnf install libsecret · Arch: sudo pacman -S libsecret) and make sure a Secret Service provider (GNOME Keyring or KeePassXC) is running and unlocked in this session, then run the setup command again.
+const SECRET_HELP = `Install secret-tool (Debian/Ubuntu: sudo apt install libsecret-tools · Fedora: sudo dnf install libsecret · Arch: sudo pacman -S libsecret) and make sure a Secret Service provider (GNOME Keyring, KDE Wallet or KeePassXC) is running and unlocked in this session, then run the setup command again.
    Alternative: put GEMINI_API_KEY into the service environment (systemctl --user edit ${UNIT_NAME}).
    Nothing was written to disk: CallMeClaude never stores secrets in plain-text files.`;
+
+/**
+ * Why `secret-tool lookup` gave no secret (pure). secret-tool exits 1 without a word both for "no such item" and
+ * for a locked keyring whose unlock prompt cannot be shown (no desktop yet), so the default collection's Locked
+ * property (`locked`, read over D-Bus) decides between them. A Secret Service that is not running at all (the hub
+ * started by linger before the desktop login) is named on stderr.
+ */
+export function classifySecretLookup(o: { status: number | null; stdout: string; stderr: string; locked?: boolean }): SecretState {
+  if (o.status === 0 && o.stdout.trim()) return 'found';
+  const err = o.stderr.trim();
+  if (/\blocked\b|prompt|dismiss/i.test(err)) return 'locked';
+  if (/org\.freedesktop\.secrets|not provided by any|ServiceUnknown|autolaunch|Could not connect|Failed to connect|No such file or directory/i.test(err)) return 'unreachable';
+  if (o.locked === true) return 'locked';
+  if (o.locked === false && !err) return 'missing';
+  return 'unknown';
+}
+
+/** `b true` / `b false` from busctl get-property; undefined for anything else. */
+export const parseBusctlBool = (out: string) => (/^b true\s*$/.test(out.trim()) ? true : /^b false\s*$/.test(out.trim()) ? false : undefined);
+
+/** Is the keyring's default collection locked? Read-only D-Bus property; undefined when it cannot be read. */
+function defaultCollectionLocked(): boolean | undefined {
+  const r = spawnSync(
+    'busctl',
+    ['--user', 'get-property', 'org.freedesktop.secrets', '/org/freedesktop/secrets/aliases/default', 'org.freedesktop.Secret.Collection', 'Locked'],
+    { encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'] },
+  );
+  return r.status === 0 ? parseBusctlBool(r.stdout ?? '') : undefined;
+}
 
 /** The login shell: $SHELL if set, else /bin/sh (no zsh assumption on Linux). */
 export const linuxShell = (env: NodeJS.ProcessEnv = process.env) => env.SHELL || '/bin/sh';
@@ -165,9 +200,10 @@ const ind = (lines: string[]) => lines.map((l) => `\n      ${l}`).join('');
 
 function driverReport(d: ComputerDriver) {
   if (d.env.session === 'none') return `!${d.notes.join(' ')}`;
-  const parts = [`${d.id}: screenshot ${d.screenshot ?? '—'}, input ${d.input ?? '—'}`];
+  const parts = [`${d.id}: screenshot ${d.screenshot ?? '—'}, input ${d.input ?? '—'}, clipboard ${d.clipboard ?? '—'}`];
   if (!d.desktop) return `!${parts[0]}. ${d.notes.join(' ')}`;
   if (!d.input) return `!${parts[0]}. Look-only: no mouse/keyboard tool${d.env.session === 'wayland' ? ' (ydotool, see below)' : ''}.`;
+  if (!d.clipboard) return `!${parts[0]}. Cannot type text: no clipboard tool (see missing tools below); clicks and single keys still work.`;
   return parts[0];
 }
 
@@ -247,6 +283,14 @@ export const linux: Platform = {
       try {
         execFileSync('secret-tool', ['clear', 'service', service, 'account', account], { stdio: 'ignore', timeout: 15_000 });
       } catch {}
+    },
+    diagnose(service, account) {
+      if (!onPath('secret-tool')) return 'unreachable';
+      const r = spawnSync('secret-tool', ['lookup', 'service', service, 'account', account], { encoding: 'utf8', timeout: 15_000, stdio: ['ignore', 'pipe', 'pipe'] });
+      const o = { status: r.status, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+      const quick = classifySecretLookup(o);
+      // A silent exit 1: ask whether the keyring is locked (only then, it is one more D-Bus round trip).
+      return quick === 'unknown' ? classifySecretLookup({ ...o, locked: defaultCollectionLocked() }) : quick;
     },
   },
 
@@ -341,8 +385,8 @@ export const linux: Platform = {
     return {
       driver: d.id,
       subject: 'computer',
-      toolsBlock: linuxToolsBlock(d, { shotDir, browser }),
-      extraRules: LINUX_EXTRA_RULES,
+      toolsBlock: linuxToolsBlock(d, { shotDir, browser, typeCmd: typeTextCommand() }),
+      extraRules: linuxExtraRules(d),
       mcpServers: {},
       ...(Object.keys(session.fromSystemd).length ? { env: session.fromSystemd } : {}),
       usable: true,
@@ -383,6 +427,7 @@ export const linux: Platform = {
       'systemctl\\s+.*\\b(stop|disable|mask|kill)\\b.*dev\\.callmeclaude',
       'sudo\\s',
     ],
+    inputGuard: blockedInput,
   },
 
   async diagnostics() {
@@ -436,7 +481,7 @@ function computerUseChecks() {
   if (needed.length) {
     checks.push({
       name: 'Computer use: missing tools',
-      fn: async () => `!${needed.map((m) => `${m.tool} (${m.purpose})`).join(', ')} → ${installCommand(pm, needed.map((m) => m.tool))}`,
+      fn: async () => `!${needed.map((m) => `${m.tool} (${m.purpose === 'clipboard' ? 'clipboard, needed to type text' : m.purpose})`).join(', ')} → ${installCommand(pm, needed.map((m) => m.tool))}`,
     });
   }
   if (d.env.session === 'wayland') {
@@ -471,7 +516,10 @@ function computerUseChecks() {
     name: 'Computer use: browser (Claude in Chrome)',
     fn: async () => {
       const found = chromeHosts();
-      return found.length ? `native host installed for ${found.join(', ')}` : '!not set up → install the Claude in Chrome extension and run `claude --chrome` once';
+      // Only the native host file is visible from here, not whether the extension has connected to it.
+      return found.length
+        ? `native host installed for ${found.join(', ')}; whether the extension is connected cannot be checked from here: run \`claude --chrome\` once to make sure`
+        : '!not set up → install the Claude in Chrome extension and run `claude --chrome` once';
     },
   });
   return checks;

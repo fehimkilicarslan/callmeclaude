@@ -1,0 +1,17 @@
+CallMeClaude — cmc <command>
+
+  setup [--gemini-key K] [--language en-US] [--apns-key-file F --apns-key-id I --team-id T --bundle-id B]
+                       Install hooks + service, store keys in the Keychain
+  pair [--rotate]      Show the QR code for pairing the phone
+  status               Sessions and pending decisions
+  call-me [--text ..]  Ring the phone now (test)
+  mode desk|away|ride|sleep
+                       When the hub may hold sessions and call you
+  run [dir] [task]     Start Claude Code inside tmux (so the hub can type into it)
+  ignore [dir] [--remove|--list]
+                       Watch-only: report status, never hold or call
+  do "<task>"          Let the hub do something on this Mac (browser/desktop)
+  panic | resume       Interrupt everything / resume automation
+  doctor               Check the installation
+  logs [-f]            Hub logs
+  restart | uninstall

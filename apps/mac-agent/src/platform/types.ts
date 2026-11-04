@@ -19,7 +19,12 @@ export interface SecretStore {
   set(service: string, account: string, value: string): void;
   /** Delete; never throws. */
   delete(service: string, account: string): void;
+  /** Linux only: after get() returned nothing, why (see classifySecretLookup). Absent on macOS. */
+  diagnose?(service: string, account: string): SecretState;
 }
+
+/** Why a secret could not be read: not stored, keyring locked, no Secret Service reachable, or cannot tell. */
+export type SecretState = 'found' | 'missing' | 'locked' | 'unreachable' | 'unknown';
 
 export interface ServiceManager {
   /** Shown to the user, e.g. "launchd". */
@@ -87,6 +92,8 @@ export interface Platform {
     protectedPaths: RegExp[];
     /** Alternatives joined into one case-insensitive DESTRUCTIVE regex. */
     destructive: string[];
+    /** Linux only: why a Bash command that drives the keyboard or clipboard is blocked, or undefined (see blockedInput). */
+    inputGuard?: (command: string) => string | undefined;
   };
   /** How a computer task operates this machine. `useChrome` = the hub passes --chrome to the agent. */
   computerUse(o: { useChrome: boolean }): Promise<ComputerUsePlan>;

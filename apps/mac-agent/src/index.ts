@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
-import { hostname, networkInterfaces } from 'node:os';
+import { homedir, hostname, networkInterfaces } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { createInterface } from 'node:readline/promises';
@@ -16,7 +16,7 @@ import type { DoctorResult } from './platform/types.ts';
 import { onPath } from './platform/linux.ts';
 import { execFileP } from './util.ts';
 import { apnsConfigured, apnsTexts } from './apns.ts';
-import { doctorLine, pairTexts, voipTokenTexts } from './cliTexts.ts';
+import { doctorLine, geminiKeySavedText, helpText, pairTexts, projectRootsResult, voipTokenTexts } from './cliTexts.ts';
 
 const [cmd = 'help', ...rest] = process.argv.slice(2);
 const flags = parseFlags(rest);
@@ -62,13 +62,15 @@ async function restartAndWait() {
 }
 
 /** Store a secret; if the OS secret store is unavailable (Linux without libsecret), explain instead of crashing. */
-function storeSecret(fn: () => void) {
+function storeSecret(fn: () => void): boolean {
   try {
     fn();
+    return true;
   } catch (e) {
     if (!(e instanceof SecretStoreError)) throw e;
     console.log(`❌ ${e.message}`);
     process.exitCode = 1;
+    return false;
   }
 }
 
@@ -126,7 +128,10 @@ async function main() {
 
     case 'setup': {
       const cfg = loadConfig();
-      if (typeof flags['gemini-key'] === 'string') storeSecret(() => setSecret('gemini-api-key', flags['gemini-key'] as string));
+      if (typeof flags['gemini-key'] === 'string' && storeSecret(() => setSecret('gemini-api-key', flags['gemini-key'] as string))) {
+        const saved = geminiKeySavedText(platform.id, platform.secrets.displayName);
+        if (saved) console.log(saved);
+      }
       if (typeof flags['apns-key-file'] === 'string') storeSecret(() => setSecret('apns-p8', readFileSync(flags['apns-key-file'] as string, 'utf8')));
       if (typeof flags['apns-key-id'] === 'string') cfg.apns.keyId = flags['apns-key-id'];
       if (typeof flags['team-id'] === 'string') cfg.apns.teamId = flags['team-id'];
@@ -283,27 +288,40 @@ async function main() {
       await uninstallService();
       return console.log(`Hooks and service removed. Your data is still in ${CONFIG_PATH} (delete it manually if you like).`);
 
+    case 'type-text':
+      // Internal, Linux only: the computer task's agent types text with it (see platform/clipboard.ts).
+      // On macOS it is an unknown command like any other and falls through to the help text.
+      if (platform.id === 'linux') return typeTextCommand(process.argv.slice(3));
+    // falls through
     default:
-      console.log(`CallMeClaude — cmc <command>
+      console.log(helpText(platform.id, platform.secrets.displayName, platform.words.this));
+  }
+}
 
-  setup [--gemini-key K] [--language en-US] [--apns-key-file F --apns-key-id I --team-id T --bundle-id B]${
-    platform.id === 'linux' ? '\n        [--tmux | --no-tmux]  Run voice-started sessions in tmux or headless (claude -p)' : ''
+/** `cmc type-text [--terminal] -- text` (or the text on stdin): paste into the focused field, keep the clipboard. */
+async function typeTextCommand(args: string[]) {
+  const { linuxComputerDriver } = await import('./platform/linux.ts');
+  const { spawnRunner, typeText } = await import('./platform/clipboard.ts');
+  const { audit, sleep } = await import('./util.ts');
+  const { ensureDirs } = await import('./config.ts');
+  ensureDirs();
+  const sep = args.indexOf('--');
+  const opts = sep === -1 ? args : args.slice(0, sep);
+  let text = sep === -1 ? '' : args.slice(sep + 1).join(' ');
+  if (sep === -1) {
+    if (process.stdin.isTTY) {
+      console.log("usage: cmc type-text [--terminal] -- 'text'   (or the text on stdin)");
+      process.exitCode = 2;
+      return;
+    }
+    for await (const c of process.stdin) text += c;
   }
-                       Install hooks + service, store keys in the ${platform.secrets.displayName}
-  pair [--rotate]      Show the QR code for pairing the phone
-  status               Sessions and pending decisions
-  call-me [--text ..]  Ring the phone now (test)
-  mode desk|away|ride|sleep
-                       When the hub may hold sessions and call you
-  run [dir] [task]     Start Claude Code inside tmux (so the hub can type into it)
-  ignore [dir] [--remove|--list]
-                       Watch-only: report status, never hold or call
-  do "<task>"          Let the hub do something on ${platform.words.this} (browser/desktop)
-  panic | resume       Interrupt everything / resume automation
-  doctor               Check the installation
-  logs [-f]            Hub logs
-  restart | uninstall`);
-  }
+  const d = linuxComputerDriver(process.env);
+  const r = await typeText(text, { clipboard: d.clipboard, input: d.input, session: d.env.session, terminal: opts.includes('--terminal'), run: spawnRunner, sleep });
+  // Never the text itself: it may be anything the developer dictated.
+  audit('computer.type', { chars: [...text].length, via: r.via, clipboard: r.clipboard, ok: r.ok });
+  console.log(r.message);
+  if (!r.ok) process.exitCode = 1;
 }
 
 async function doctor() {
@@ -342,6 +360,7 @@ async function doctor() {
   for (const c of platform.doctorChecks()) await check(c.name, c.fn);
   await check('Mode', async () => cfg.mode);
   await check('Voice language', async () => cfg.language);
+  if (platform.id === 'linux') await check('Project roots (where voice-started sessions may run)', async () => projectRootsResult(cfg.projectRoots, homedir(), CONFIG_PATH));
 }
 
 main().catch((e) => {

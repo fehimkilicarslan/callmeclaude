@@ -19,5 +19,6 @@ export function securityPatterns(p: Platform = platform) {
   return {
     PROTECTED: [...COMMON_PROTECTED, ...p.security.protectedPaths],
     DESTRUCTIVE: new RegExp(`(${p.security.destructive.join('|')})`, 'i'),
+    INPUT_GUARD: p.security.inputGuard,
   };
 }

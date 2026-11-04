@@ -86,6 +86,7 @@ Any phone works with any hub: the Android app also works with a macOS hub, and t
 | Computer use: browser (Claude in Chrome) | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Computer use: screenshots | ✅ Peekaboo / `screencapture` | ✅ `scrot`, `import` or `maim` | ✅ `spectacle` | ✅ `grim` | ❌ not supported |
 | Computer use: mouse and keyboard | ✅ Peekaboo / `cliclick` | ✅ `xdotool` | ⚙️ `ydotool` 1.x, optional | ⚙️ `ydotool` 1.x, optional | ❌ (no screenshots to check against) |
+| Computer use: typing text (any keyboard layout) | ✅ Peekaboo | ✅ pasted through `xclip` or `xsel`, clipboard put back | ✅ pasted through `wl-clipboard`, clipboard put back | ✅ same | ❌ |
 | Sessions you start by voice | ✅ in tmux | ✅ in tmux, or headless (`claude -p`) if you choose no tmux | ✅ same | ✅ same | ✅ same |
 
 | Phone | Rings in the background | Needs |
@@ -107,8 +108,8 @@ On Linux and Android instead:
 
 | | |
 |---|---|
-| Linux | Node 22.5+, pnpm, `secret-tool` (libsecret) with an unlocked keyring; optional: tmux, the computer-use tools for your desktop |
-| Android | Android 10+; JDK 17 and the Android SDK to build the APK |
+| Linux | Node 22.5+, pnpm, `secret-tool` (libsecret) with an unlocked keyring (on KDE Plasma, KDE Wallet provides it; elsewhere GNOME Keyring); optional: tmux, the computer-use tools for your desktop, including `wl-clipboard` (Wayland) or `xclip` (X11), without which the agent cannot type text |
+| Android | Android 10+; JDK 17 and the Android SDK to build the APK. On Android 17 the local network permission is needed only for LAN addresses; Tailscale works without it |
 
 ## Quick start
 
@@ -132,11 +133,15 @@ git clone https://github.com/wutlu/callmeclaude && cd callmeclaude
 pnpm install
 mkdir -p ~/.local/bin && ln -s "$PWD/apps/mac-agent/bin/cmc.mjs" ~/.local/bin/cmc
 
-cmc setup --gemini-key <GEMINI_KEY> --language en-US   # hooks + systemd --user service; asks about tmux; key → keyring
-cmc doctor                                             # linger, sleep and computer-use advice
+read -rs -p 'Gemini API key: ' KEY; echo               # keeps the key out of your shell history
+cmc setup --gemini-key "$KEY" --language en-US         # hooks + systemd --user service; asks about tmux; key → keyring
+unset KEY
+cmc doctor                                             # linger, sleep, project roots and computer-use advice
 cmc pair                                               # scan the QR code in the app
 cmc call-me                                            # your phone rings
 ```
+
+Sessions you start by voice run only inside your **project roots** (on Linux by default `~/projects`, `~/Desktop/projects` and other common folders that exist). Change them with `projectRoots` in `~/.callmeclaude/config.json`, then `systemctl --user restart dev.callmeclaude.hub`; see [INSTALLATION.md › L2](INSTALLATION.md#l2-install-the-hub). To keep a Linux computer awake only while you are away, without `sudo`: [INSTALLATION.md › L3](INSTALLATION.md#l3-keep-the-hub-running-linger-and-sleep).
 
 **Android app:** build and install the APK as described in [apps/android/README.md](apps/android/README.md), then scan the `cmc pair` QR code. It works with a macOS or a Linux hub.
 
@@ -160,6 +165,7 @@ This software can operate your computer by voice. The defaults are conservative:
 
 - Risky actions need an explicit spoken confirmation: payments, deploys, `git push`, deleting, sending messages, computer use.
 - Destructive shell commands and sensitive paths (`~/.ssh`, the Keychain, `.env`; on Linux also the keyring files) are blocked for the hub's own agent.
+- On Linux the hub's agent types text only by pasting it through the clipboard and puts your clipboard back afterwards; select-all (Ctrl+A) and cut (Ctrl+X) are blocked for it, and it fixes mistakes only with undo (Ctrl+Z).
 - Web page content is treated as data, never as instructions.
 - Everything goes into an append-only audit log in `~/.callmeclaude/audit`.
 
@@ -169,7 +175,8 @@ Read [docs/08-security.md](docs/08-security.md) and [SECURITY.md](SECURITY.md) b
 
 - **GNOME on Wayland:** no screenshots, so no desktop control; only the browser path (Claude in Chrome) works.
 - **ydotool is optional and has a security cost:** mouse and keyboard on Wayland need write access to `/dev/uinput`, and then every program running as your user can create synthetic input. It is off until you set it up yourself, and only ydotool 1.x is used.
-- **Headless Linux:** without a desktop login the keyring may stay locked, so the hub cannot read its keys.
+- **Linux clipboard:** text on the clipboard is put back after the agent types; an image or other non-text content cannot be, so it is cleared and the agent tells you.
+- **Headless Linux:** without a desktop login the keyring may stay locked, so the hub cannot read its keys. The phone then says that the key is in the keyring, which unlocks when you log in.
 - **Android has no push:** the app keeps a permanent connection to the hub. If Android or the manufacturer stops the app, the hub can't ring it, so the battery settings matter.
 - **Smartwatches:** some watches register as a phone headset and pull the call audio to themselves.
 
