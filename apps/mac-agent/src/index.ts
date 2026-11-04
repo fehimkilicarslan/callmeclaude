@@ -14,7 +14,7 @@ import { hooksInstalled, installHooks, installService, restartService, uninstall
 import { platform, SecretStoreError } from './platform/index.ts';
 import { onPath } from './platform/linux.ts';
 import { execFileP } from './util.ts';
-import { apnsConfigured } from './apns.ts';
+import { apnsConfigured, apnsTexts } from './apns.ts';
 
 const [cmd = 'help', ...rest] = process.argv.slice(2);
 const flags = parseFlags(rest);
@@ -156,7 +156,7 @@ async function main() {
         console.log(`✅ ${SERVICE.displayName} service installed: ${SERVICE.definitionPath}`);
       }
       if (!getSecret('gemini-api-key')) console.log('⚠️  No Gemini API key: cmc setup --gemini-key <KEY>  (https://aistudio.google.com/apikey)');
-      if (!apnsConfigured(cfg)) console.log('⚠️  APNs not configured (the hub can only ring the phone while the app is open): cmc setup --apns-key-file AuthKey_XXX.p8 --apns-key-id XXX --team-id XXX --bundle-id XXX');
+      if (!apnsConfigured(cfg)) console.log(apnsTexts(platform.id).setupMissing);
       console.log(`Voice language: ${cfg.language}  (change with --language, e.g. en-US, tr-TR, de-DE)`);
       if (sessions) {
         console.log(`Voice-started sessions: ${sessions}  (change with --tmux / --no-tmux)`);
@@ -326,7 +326,8 @@ async function doctor() {
     return r.ok;
   });
   await check('Gemini API key', async () => !!getSecret('gemini-api-key'));
-  await check('APNs (hub can ring the phone)', async () => (apnsConfigured(cfg) ? `${cfg.apns.environment}` : '!not configured'));
+  const apns = apnsTexts(platform.id);
+  await check(apns.doctorName, async () => (apnsConfigured(cfg) ? `${cfg.apns.environment}` : apns.doctorMissing));
   await check('Phone registered (VoIP token)', async () => {
     const p = join(CONFIG_PATH, '..', 'devices.json');
     if (!existsSync(p)) return '!not paired yet';
