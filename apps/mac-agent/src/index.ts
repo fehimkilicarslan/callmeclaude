@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
-import { hostname, networkInterfaces } from 'node:os';
+import { homedir, hostname, networkInterfaces } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { createInterface } from 'node:readline/promises';
@@ -16,7 +16,7 @@ import type { DoctorResult } from './platform/types.ts';
 import { onPath } from './platform/linux.ts';
 import { execFileP } from './util.ts';
 import { apnsConfigured, apnsTexts } from './apns.ts';
-import { doctorLine, pairTexts, voipTokenTexts } from './cliTexts.ts';
+import { doctorLine, pairTexts, projectRootsResult, voipTokenTexts } from './cliTexts.ts';
 
 const [cmd = 'help', ...rest] = process.argv.slice(2);
 const flags = parseFlags(rest);
@@ -373,6 +373,7 @@ async function doctor() {
   for (const c of platform.doctorChecks()) await check(c.name, c.fn);
   await check('Mode', async () => cfg.mode);
   await check('Voice language', async () => cfg.language);
+  if (platform.id === 'linux') await check('Project roots (where voice-started sessions may run)', async () => projectRootsResult(cfg.projectRoots, homedir(), CONFIG_PATH));
 }
 
 main().catch((e) => {

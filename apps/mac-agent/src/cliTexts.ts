@@ -44,3 +44,10 @@ export function voipTokenTexts(os: NodeJS.Platform) {
     },
   };
 }
+
+/** Linux doctor: the project roots on one line, or how to add one (voice-started sessions need one). */
+export function projectRootsResult(roots: string[], home: string, configPath: string): DoctorResult {
+  const tilde = (p: string) => (p === home ? '~' : p.startsWith(home + '/') ? '~' + p.slice(home.length) : p);
+  if (roots.length) return roots.map(tilde).join(', ');
+  return `!none, so sessions cannot be started by voice → add your project folders to "projectRoots" in ${tilde(configPath)}, then systemctl --user restart dev.callmeclaude.hub`;
+}

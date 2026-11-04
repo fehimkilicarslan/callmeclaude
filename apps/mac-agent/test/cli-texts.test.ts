@@ -54,3 +54,22 @@ test('Linux doctor: a missing APNs key or VoIP token is an iPhone-only note, not
   assert.equal(doctorLine(voip.doctorName, voip.result({ 'iPhone A': { voipToken: 'x' } })), '✅ iPhone registered (VoIP token): iPhone A');
   for (const l of [doctorLine(apns.doctorName, apns.doctorMissing), note]) assert.ok(!l.includes('❌'));
 });
+
+test('default project roots: macOS list unchanged, Linux adds the common lowercase folders', async () => {
+  const { projectRootCandidates } = await import('../src/platform/projectRoots.ts');
+  const mac = ['Desktop/Projeler', 'Projects', 'Projeler', 'code', 'dev', 'src', 'Developer'];
+  assert.deepEqual(projectRootCandidates('darwin'), mac);
+  const lin = projectRootCandidates('linux');
+  assert.deepEqual(lin.slice(0, mac.length), mac);
+  for (const p of ['projects', 'Desktop/projects']) assert.ok(lin.includes(p), p);
+});
+
+test('Linux doctor: project roots on one line, or how to add one', async () => {
+  const { projectRootsResult } = await import('../src/cliTexts.ts');
+  const h = '/home/u';
+  assert.equal(doctorLine('Project roots', projectRootsResult(['/home/u/projects', '/srv/code'], h, '/home/u/.callmeclaude/config.json')), '✅ Project roots: ~/projects, /srv/code');
+  assert.equal(
+    doctorLine('Project roots', projectRootsResult([], h, '/home/u/.callmeclaude/config.json')),
+    '❌ Project roots: none, so sessions cannot be started by voice → add your project folders to "projectRoots" in ~/.callmeclaude/config.json, then systemctl --user restart dev.callmeclaude.hub',
+  );
+});
