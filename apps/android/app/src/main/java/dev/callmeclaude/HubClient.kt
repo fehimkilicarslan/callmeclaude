@@ -19,6 +19,7 @@ import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import okio.ByteString
+import okio.ByteString.Companion.toByteString
 
 /**
  * WebSocket connection to the hub. JSON text frames = control, binary frames = audio.
@@ -26,9 +27,9 @@ import okio.ByteString
  * Port of apps/ios/CallMeClaude/HubClient.swift. Connecting races all pairing URLs (Tailscale IP,
  * MagicDNS name, LAN IP) in parallel; the first one that answers wins and the others are cancelled.
  *
- * This class does not know about Activities. Anything that needs the link up (the UI today, a
- * foreground service later) calls [setActive] with its own reason; the client keeps reconnecting
- * while at least one reason is active.
+ * This class does not know about Activities. Anything that needs the link up (the UI, the
+ * foreground service, a live call) calls [setActive] with its own reason; the client keeps
+ * reconnecting while at least one reason is active.
  */
 class HubClient(
     private val store: PairingStore,
@@ -46,7 +47,7 @@ class HubClient(
     val status: StateFlow<String> = _status.asStateFlow()
     val pairing: StateFlow<PairingInfo?> = _pairing.asStateFlow()
 
-    /** Binary frames (assistant audio). Called on OkHttp's reader thread. Not used yet. */
+    /** Binary frames (assistant audio). Called on OkHttp's reader thread. */
     @Volatile var onBinary: ((ByteString) -> Unit)? = null
 
     /** Messages the client doesn't handle itself (call.*, audio.flush, transcript…). Called on the hub thread. */
@@ -54,6 +55,9 @@ class HubClient(
 
     /** Fired after every successful (re)connection + hello. Called on the hub thread. */
     @Volatile var onConnected: (() -> Unit)? = null
+
+    /** Fired when an established connection is lost or closed. Called on the hub thread. */
+    @Volatile var onDisconnected: (() -> Unit)? = null
 
     // Everything below is confined to the single hub thread (the `q` of the iOS version).
     private val q = Executors.newSingleThreadExecutor { r -> Thread(r, "cmc.hub").apply { isDaemon = true } }
@@ -197,6 +201,7 @@ class HubClient(
         task = null
         generation += 1
         setConnected(false)
+        onDisconnected?.invoke()
         _status.value = "Connection lost, reconnecting…"
         scheduleReconnect(500)
     }
@@ -232,6 +237,7 @@ class HubClient(
         task = null
         candidates.forEach { it.close(1000, null) }
         candidates.clear()
+        if (isConnected) onDisconnected?.invoke()
         setConnected(false)
         if (p != null) open() else _status.value = "Not paired"
     }
@@ -264,6 +270,11 @@ class HubClient(
 
     fun sendJSON(text: String) {
         task?.send(text)
+    }
+
+    /** Microphone audio. Thread-safe; dropped while there is no connection (the hub keeps the call ~20 s). */
+    fun sendBinary(bytes: ByteArray) {
+        task?.send(bytes.toByteString())
     }
 
     fun setMode(mode: String) = sendJSON(AppMessages.modeSet(mode))

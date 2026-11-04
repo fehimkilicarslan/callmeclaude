@@ -8,7 +8,12 @@ import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
 import dev.callmeclaude.ui.App
+import kotlinx.coroutines.flow.distinctUntilChangedBy
+import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
     private val hub get() = (application as CallMeClaudeApp).hub
@@ -22,6 +27,13 @@ class MainActivity : ComponentActivity() {
         )
         if (savedInstanceState == null) acceptDebugPairing(intent)
         setContent { App(hub) }
+        // Paired → keep the hub connection in the foreground service; unpaired → stop it.
+        // Started from here because foreground services can't be started from the background.
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                hub.pairing.distinctUntilChangedBy { it != null }.collect { HubService.sync(this@MainActivity, it != null) }
+            }
+        }
     }
 
     override fun onNewIntent(intent: Intent) {

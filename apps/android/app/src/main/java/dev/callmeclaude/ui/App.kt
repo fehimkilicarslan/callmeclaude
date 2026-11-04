@@ -89,6 +89,8 @@ private fun HomeScreen(hub: HubClient, onSettings: () -> Unit) {
     var confirmPanic by remember { mutableStateOf(false) }
     var refreshing by remember { mutableStateOf(false) }
 
+    AskCallPermissionsOnce()
+
     val sessions = snapshot?.sessions.orEmpty()
     val pending = snapshot?.pending.orEmpty()
     val paused = snapshot?.paused == true

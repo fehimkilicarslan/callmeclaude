@@ -7,6 +7,12 @@
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-feature android:name="android.hardware.camera.any" android:required="false" />
 
+    <!-- Hub connection kept in a foreground service (see HubService). -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+
     <!-- The pairing token must not leave the device: no cloud backup, no device-to-device transfer. -->
     <application
         android:name=".CallMeClaudeApp"
@@ -30,6 +36,20 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!--
+            Holds the WebSocket to the paired computer so it can ring this phone. There is no push
+            service on Android: the hub announces calls over this socket. Idle it runs as specialUse,
+            during a call as specialUse|phoneCall|microphone.
+        -->
+        <service
+            android:name=".HubService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Keeps a WebSocket open to the user's own paired computer so it can ring this phone when a Claude Code session needs the user. No push service is used." />
+        </service>
 
         <!-- ZXing's scanner defaults to landscape; follow the device instead. -->
         <activity
