@@ -515,7 +515,10 @@ function computerUseChecks() {
     name: 'Computer use: browser (Claude in Chrome)',
     fn: async () => {
       const found = chromeHosts();
-      return found.length ? `native host installed for ${found.join(', ')}` : '!not set up → install the Claude in Chrome extension and run `claude --chrome` once';
+      // Only the native host file is visible from here, not whether the extension has connected to it.
+      return found.length
+        ? `native host installed for ${found.join(', ')}; whether the extension is connected cannot be checked from here: run \`claude --chrome\` once to make sure`
+        : '!not set up → install the Claude in Chrome extension and run `claude --chrome` once';
     },
   });
   return checks;

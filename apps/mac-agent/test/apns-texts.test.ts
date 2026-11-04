@@ -19,7 +19,5 @@ test('Linux APNs texts: only iPhones need APNs to ring in the background, Androi
   assert.ok(!t.setupMissing.includes('the hub can only ring the phone'));
   assert.equal(t.doctorName, 'APNs (hub can ring an iPhone in the background)');
   // A note, not a problem: doctor shows it with ℹ️ instead of ❌.
-  assert.deepEqual(t.doctorMissing, {
-    info: 'not configured: needed only to ring an iPhone in the background (the Android app is not affected)',
-  });
+  assert.deepEqual(t.doctorMissing, { info: 'not configured (the Android app does not need it)' });
 });

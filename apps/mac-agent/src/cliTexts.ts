@@ -51,3 +51,30 @@ export function projectRootsResult(roots: string[], home: string, configPath: st
   if (roots.length) return roots.map(tilde).join(', ');
   return `!none, so sessions cannot be started by voice → add your project folders to "projectRoots" in ${tilde(configPath)}, then systemctl --user restart dev.callmeclaude.hub`;
 }
+
+/** `cmc help`. `secretStore` = the platform's secret store name, `thisMachine` = "this Mac" / "this computer". */
+export function helpText(os: NodeJS.Platform, secretStore: string, thisMachine: string) {
+  const tmux = os === 'linux' ? '\n                       --tmux | --no-tmux: run voice-started sessions in tmux or headless (claude -p)' : '';
+  return `CallMeClaude — cmc <command>
+
+  setup [--gemini-key K] [--language en-US] [--apns-key-file F --apns-key-id I --team-id T --bundle-id B]
+                       Install hooks + service, store keys in the ${secretStore}${tmux}
+  pair [--rotate]      Show the QR code for pairing the phone
+  status               Sessions and pending decisions
+  call-me [--text ..]  Ring the phone now (test)
+  mode desk|away|ride|sleep
+                       When the hub may hold sessions and call you
+  run [dir] [task]     Start Claude Code inside tmux (so the hub can type into it)
+  ignore [dir] [--remove|--list]
+                       Watch-only: report status, never hold or call
+  do "<task>"          Let the hub do something on ${thisMachine} (browser/desktop)
+  panic | resume       Interrupt everything / resume automation
+  doctor               Check the installation
+  logs [-f]            Hub logs
+  restart | uninstall`;
+}
+
+/** `cmc setup --gemini-key` after the key was stored: a ✅ line on Linux, nothing on macOS (as before). */
+export function geminiKeySavedText(os: NodeJS.Platform, secretStore: string): string | undefined {
+  return os === 'linux' ? `✅ Gemini API key stored in the ${secretStore}.` : undefined;
+}

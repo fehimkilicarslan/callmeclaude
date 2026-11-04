@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { doctorLine, pairTexts, voipTokenTexts } from '../src/cliTexts.ts';
+import { readFileSync } from 'node:fs';
+import { doctorLine, geminiKeySavedText, helpText, pairTexts, voipTokenTexts } from '../src/cliTexts.ts';
 import { apnsTexts } from '../src/apns.ts';
 
 test('macOS cmc pair texts are byte-for-byte unchanged', () => {
@@ -43,7 +44,7 @@ test('Linux doctor: a missing APNs key or VoIP token is an iPhone-only note, not
   const apns = apnsTexts('linux');
   assert.equal(
     doctorLine(apns.doctorName, apns.doctorMissing),
-    'ℹ️  APNs (hub can ring an iPhone in the background): not configured: needed only to ring an iPhone in the background (the Android app is not affected)',
+    'ℹ️  APNs (hub can ring an iPhone in the background): not configured (the Android app does not need it)',
   );
 
   const voip = voipTokenTexts('linux');
@@ -72,4 +73,18 @@ test('Linux doctor: project roots on one line, or how to add one', async () => {
     doctorLine('Project roots', projectRootsResult([], h, '/home/u/.callmeclaude/config.json')),
     '❌ Project roots: none, so sessions cannot be started by voice → add your project folders to "projectRoots" in ~/.callmeclaude/config.json, then systemctl --user restart dev.callmeclaude.hub',
   );
+});
+
+test('macOS cmc help is byte-for-byte unchanged (fixture generated from the previous inline template)', () => {
+  assert.equal(helpText('darwin', 'Keychain', 'this Mac'), readFileSync(new URL('./fixtures/darwin-help.txt', import.meta.url), 'utf8'));
+  assert.equal(geminiKeySavedText('darwin', 'Keychain'), undefined, 'macOS setup prints no new line');
+});
+
+test('Linux cmc help: the tmux line comes after the setup description', () => {
+  const lines = helpText('linux', 'keyring (libsecret)', 'this computer').split('\n');
+  const i = lines.findIndex((l) => l.startsWith('  setup '));
+  assert.equal(lines[i + 1], '                       Install hooks + service, store keys in the keyring (libsecret)');
+  assert.equal(lines[i + 2], '                       --tmux | --no-tmux: run voice-started sessions in tmux or headless (claude -p)');
+  assert.ok(lines[i + 3].startsWith('  pair '));
+  assert.equal(geminiKeySavedText('linux', 'keyring (libsecret)'), '✅ Gemini API key stored in the keyring (libsecret).');
 });

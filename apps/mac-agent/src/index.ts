@@ -16,7 +16,7 @@ import type { DoctorResult } from './platform/types.ts';
 import { onPath } from './platform/linux.ts';
 import { execFileP } from './util.ts';
 import { apnsConfigured, apnsTexts } from './apns.ts';
-import { doctorLine, pairTexts, projectRootsResult, voipTokenTexts } from './cliTexts.ts';
+import { doctorLine, geminiKeySavedText, helpText, pairTexts, projectRootsResult, voipTokenTexts } from './cliTexts.ts';
 
 const [cmd = 'help', ...rest] = process.argv.slice(2);
 const flags = parseFlags(rest);
@@ -62,13 +62,15 @@ async function restartAndWait() {
 }
 
 /** Store a secret; if the OS secret store is unavailable (Linux without libsecret), explain instead of crashing. */
-function storeSecret(fn: () => void) {
+function storeSecret(fn: () => void): boolean {
   try {
     fn();
+    return true;
   } catch (e) {
     if (!(e instanceof SecretStoreError)) throw e;
     console.log(`❌ ${e.message}`);
     process.exitCode = 1;
+    return false;
   }
 }
 
@@ -126,7 +128,10 @@ async function main() {
 
     case 'setup': {
       const cfg = loadConfig();
-      if (typeof flags['gemini-key'] === 'string') storeSecret(() => setSecret('gemini-api-key', flags['gemini-key'] as string));
+      if (typeof flags['gemini-key'] === 'string' && storeSecret(() => setSecret('gemini-api-key', flags['gemini-key'] as string))) {
+        const saved = geminiKeySavedText(platform.id, platform.secrets.displayName);
+        if (saved) console.log(saved);
+      }
       if (typeof flags['apns-key-file'] === 'string') storeSecret(() => setSecret('apns-p8', readFileSync(flags['apns-key-file'] as string, 'utf8')));
       if (typeof flags['apns-key-id'] === 'string') cfg.apns.keyId = flags['apns-key-id'];
       if (typeof flags['team-id'] === 'string') cfg.apns.teamId = flags['team-id'];
@@ -289,25 +294,7 @@ async function main() {
       if (platform.id === 'linux') return typeTextCommand(process.argv.slice(3));
     // falls through
     default:
-      console.log(`CallMeClaude — cmc <command>
-
-  setup [--gemini-key K] [--language en-US] [--apns-key-file F --apns-key-id I --team-id T --bundle-id B]${
-    platform.id === 'linux' ? '\n        [--tmux | --no-tmux]  Run voice-started sessions in tmux or headless (claude -p)' : ''
-  }
-                       Install hooks + service, store keys in the ${platform.secrets.displayName}
-  pair [--rotate]      Show the QR code for pairing the phone
-  status               Sessions and pending decisions
-  call-me [--text ..]  Ring the phone now (test)
-  mode desk|away|ride|sleep
-                       When the hub may hold sessions and call you
-  run [dir] [task]     Start Claude Code inside tmux (so the hub can type into it)
-  ignore [dir] [--remove|--list]
-                       Watch-only: report status, never hold or call
-  do "<task>"          Let the hub do something on ${platform.words.this} (browser/desktop)
-  panic | resume       Interrupt everything / resume automation
-  doctor               Check the installation
-  logs [-f]            Hub logs
-  restart | uninstall`);
+      console.log(helpText(platform.id, platform.secrets.displayName, platform.words.this));
   }
 }
 
