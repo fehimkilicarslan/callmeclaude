@@ -12,6 +12,7 @@ import android.telecom.DisconnectCause
 import android.telecom.PhoneAccountHandle
 import android.telecom.TelecomManager
 import android.util.Log
+import android.annotation.SuppressLint
 import android.annotation.TargetApi
 import dev.callmeclaude.CallMeClaudeApp
 
@@ -104,6 +105,8 @@ class CmcConnection(private val calls: CallManager, val callId: String) : Connec
         firstRoute()
     }
 
+    @TargetApi(34) // only called on API 34+
+    @SuppressLint("UseRequiresApi")
     override fun onCallEndpointChanged(endpoint: CallEndpoint) {
         current = endpoint
         Log.d(TAG, "audio endpoint: ${endpoint.endpointName} (type ${endpoint.endpointType})")
@@ -121,7 +124,8 @@ class CmcConnection(private val calls: CallManager, val callId: String) : Connec
         if (Build.VERSION.SDK_INT >= 34) routeEndpoint(speaker) else routeLegacy(speaker)
     }
 
-    @TargetApi(34)
+    @TargetApi(34) // caller checks SDK_INT
+    @SuppressLint("UseRequiresApi")
     private fun routeEndpoint(speaker: Boolean) {
         val eps = endpoints.filterIsInstance<CallEndpoint>()
         fun of(type: Int) = eps.firstOrNull { it.endpointType == type }

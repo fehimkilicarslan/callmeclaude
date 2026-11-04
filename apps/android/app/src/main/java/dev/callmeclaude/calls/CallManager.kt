@@ -1,5 +1,6 @@
 package dev.callmeclaude.calls
 
+import android.annotation.SuppressLint
 import android.content.ComponentName
 import android.content.Context
 import android.graphics.drawable.Icon
@@ -133,6 +134,7 @@ class CallManager(
 
     fun setSpeaker(on: Boolean) {
         _speaker.value = on
+        @SuppressLint("UseKtx") // no androidx.core dependency on purpose
         prefs.edit().putBoolean("speaker", on).apply()
         machine.active?.let { connections[it.callId]?.route(on) }
     }
@@ -241,6 +243,8 @@ class CallManager(
         HubService.callChanged(context, ui)
     }
 
+    // placeCall needs MANAGE_OWN_CALLS, an install-time permission; failures are caught below anyway.
+    @SuppressLint("MissingPermission")
     private fun run(f: Effect) {
         when (f) {
             is Effect.ReportIncoming -> {
