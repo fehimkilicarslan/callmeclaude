@@ -138,6 +138,8 @@ export class State extends EventEmitter {
         updatedAt: now,
       };
       this.sessions.set(id, s);
+      // Claude Code does not deliver SessionStart over HTTP hooks, so a session is "new" on its first hook.
+      this.bindCallback(s);
     }
     Object.assign(s, patch, { updatedAt: now });
     if (cwd && !s.cwd) {

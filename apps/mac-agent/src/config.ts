@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from '
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
+import { projectRootCandidates } from './platform/projectRoots.ts';
 
 export const DATA_DIR = process.env.CMC_HOME ?? join(homedir(), '.callmeclaude');
 export const CONFIG_PATH = join(DATA_DIR, 'config.json');
@@ -11,6 +12,8 @@ export const LOG_DIR = join(DATA_DIR, 'logs');
 export const BRAIN_DIR = join(DATA_DIR, 'brain');
 
 export type Mode = 'desk' | 'away' | 'ride' | 'sleep';
+/** Where voice-started Claude Code sessions run: a detached tmux session, or a background `claude -p`. */
+export type VoiceSessions = 'tmux' | 'headless';
 
 export interface Config {
   hookPort: number;
@@ -54,12 +57,13 @@ export interface Config {
   ignorePaths: string[];
   /** Per-project auto-approve rules: tool name prefixes, e.g. "Bash(npm test", "Edit". */
   autoApprove: Record<string, string[]>;
+  /** Linux only, chosen by `cmc setup` (absent = tmux). Not in the defaults, so macOS configs never get this key. */
+  voiceSessions?: VoiceSessions;
 }
 
-function defaultRoots(): string[] {
-  const h = homedir();
-  return ['Desktop/Projeler', 'Projects', 'Projeler', 'code', 'dev', 'src', 'Developer']
-    .map((p) => join(h, p))
+export function defaultRoots(os: NodeJS.Platform = process.platform, home = homedir()): string[] {
+  return projectRootCandidates(os)
+    .map((p) => join(home, p))
     .filter((p) => existsSync(p));
 }
 
@@ -85,6 +89,47 @@ export function defaultConfig(): Config {
     ignorePaths: [],
     autoApprove: {},
   };
+}
+
+/** How voice-started sessions run on this OS. macOS always uses tmux. */
+export function voiceSessionMode(cfg: Pick<Config, 'voiceSessions'>, os: NodeJS.Platform = process.platform): VoiceSessions {
+  return os === 'linux' && cfg.voiceSessions === 'headless' ? 'headless' : 'tmux';
+}
+
+/**
+ * What `cmc setup` should do about voiceSessions (pure, for tests):
+ * undefined = leave the config alone (not Linux), 'ask' = prompt the user, otherwise the value to store.
+ */
+export function planVoiceSessions(o: {
+  os: NodeJS.Platform;
+  flags: Record<string, unknown>;
+  interactive: boolean;
+  tmuxInstalled: boolean;
+}): VoiceSessions | 'ask' | undefined {
+  if (o.os !== 'linux') return undefined;
+  if (o.flags.tmux && o.flags['no-tmux']) throw new Error('Use either --tmux or --no-tmux, not both.');
+  if (o.flags.tmux) return 'tmux';
+  if (o.flags['no-tmux']) return 'headless';
+  if (o.interactive) return 'ask';
+  return o.tmuxInstalled ? 'tmux' : 'headless';
+}
+
+/**
+ * The answer to the Linux setup question (pure). Choice 1 is the default shown first: tmux when it is installed,
+ * headless otherwise. Empty = the default; the option names work too. Anything else: undefined (ask again).
+ */
+export function parseVoiceSessionsAnswer(answer: string, tmuxInstalled: boolean): VoiceSessions | undefined {
+  const a = answer.trim().toLowerCase();
+  const [first, second]: VoiceSessions[] = tmuxInstalled ? ['tmux', 'headless'] : ['headless', 'tmux'];
+  if (a === '' || a === '1') return first;
+  if (a === '2') return second;
+  if (a === 'tmux' || a === 'headless') return a;
+  return undefined;
+}
+
+/** True if dir is one of the project roots or inside one. */
+export function inProjectRoots(roots: string[], dir: string) {
+  return roots.some((r) => dir === r || dir.startsWith(r + '/'));
 }
 
 export function ensureDirs() {

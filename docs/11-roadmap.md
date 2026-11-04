@@ -1,6 +1,6 @@
 # 11 · Yol Haritası
 
-## Durum (2026-11-03)
+## Durum (2026-11-04)
 
 | Faz | Durum |
 |---|---|
@@ -10,7 +10,9 @@
 | 3 — Hub arar (PushKit + CallKit) | ✅ kilit ekranında VoIP push ile doğrulandı; hücresel ağ + Tailscale ile doğrulandı |
 | 4 — Tıkanma çözme (hold, tmux, resume, kuyruk) | ✅ gerçek Claude Code oturumuyla uçtan uca doğrulandı |
 | 5 — Computer use (Peekaboo, Claude in Chrome) | ✅ launchd servisinden doğrulandı (`cmc do`) |
-| 6 — Gözetimsiz sağlamlık | 🟡 `cmc doctor`, panik, audit hazır; offline uyarısı, sesli PIN, ElevenLabs, Android sırada |
+| 6 — Gözetimsiz sağlamlık | 🟡 `cmc doctor`, panik, audit hazır; offline uyarısı, sesli PIN, ElevenLabs sırada |
+| Linux Hub | ✅ systemd `--user`, libsecret, isteğe bağlı tmux ([ADR-0006](adr/0006-linux-hub.md)); computer-use sürücü seçimi ([ADR-0008](adr/0008-linux-computer-use.md)) |
+| Android uygulaması | ✅ FCM'siz, foreground service + self-managed `ConnectionService` ([ADR-0007](adr/0007-android-app.md)) |
 
 ## Faz 0 — Temel (Hub iskeleti)
 - [ ] Monorepo (pnpm workspaces), TypeScript, lint/test altyapısı
@@ -58,7 +60,7 @@
 
 ## Faz 7+ (fikirler)
 - Claude Desktop sohbet pencerelerini Accessibility ile okuma
-- Linux/Windows Hub
+- Windows Hub (Linux Hub: ✅, yukarıdaki tablo)
 - Lume VM içinde izole computer-use
 - PSTN yedeği (Twilio BYOK)
 - Apple Watch / CarPlay arayüzü

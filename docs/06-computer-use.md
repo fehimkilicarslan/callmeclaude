@@ -2,6 +2,8 @@
 
 Bir oturum "bunu yapamam" dediğinde ve developer *"sen yap"* dediğinde Hub, masaüstünü kendisi kullanır.
 
+> **Linux:** Bu belge macOS yolunu anlatır. Linux'ta Hub, görev başlarken masaüstüne göre sürücü seçer (X11: scrot/import/maim + xdotool; Wayland + KDE: spectacle + ydotool; Wayland + wlroots: grim + ydotool; GNOME Wayland'de ekran görüntüsü yok, yalnızca Claude in Chrome). Bkz. [ADR-0008](adr/0008-linux-computer-use.md).
+
 ## Katmanlı strateji: önce yapı, sonra piksel
 
 | Seviye | Araç | Ne zaman | Güvenilirlik |

@@ -9,7 +9,7 @@ import {
 import type { HubToApp } from '@callmeclaude/protocol';
 import type { Hub } from '../hub.ts';
 import type { CallItem } from '../calls.ts';
-import { getSecret } from '../secrets.ts';
+import { geminiKeyProblem, getSecret } from '../secrets.ts';
 import { audit, log, redact } from '../util.ts';
 import { briefing, systemPrompt } from './prompt.ts';
 import { declarations, LONG_TOOLS, runTool } from './tools.ts';
@@ -65,7 +65,7 @@ export class VoiceCall {
 
   private async connect() {
     const apiKey = getSecret('gemini-api-key');
-    if (!apiKey) throw new Error('No Gemini API key. Run `cmc setup --gemini-key <KEY>`.');
+    if (!apiKey) throw new Error(geminiKeyProblem());
     const ai = new GoogleGenAI({ apiKey });
     const v = this.hub.cfg.voice;
     this.live = await ai.live.connect({

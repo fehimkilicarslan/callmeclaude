@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The hub listens on plain ws:// and the phone reaches it by Tailscale IP, MagicDNS name or LAN IP.
+  These hosts are user-specific IPs, so cleartext cannot be scoped to a domain list.
+  Tailscale encrypts the traffic end to end with WireGuard; on the LAN the hub still requires the
+  pairing token. The iOS app makes the same choice with NSAllowsArbitraryLoads (apps/ios Info.plist).
+-->
+<network-security-config xmlns:tools="http://schemas.android.com/tools">
+    <base-config cleartextTrafficPermitted="true" tools:ignore="InsecureBaseConfiguration">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

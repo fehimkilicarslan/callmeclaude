@@ -1,13 +1,19 @@
-import { spawn } from 'node:child_process';
+import { spawn, type ChildProcess } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { existsSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
-import type { Config } from './config.ts';
+import { inProjectRoots, voiceSessionMode, type Config } from './config.ts';
 import { norm, type Pending, type Session, type State } from './state.ts';
 import { audit, execFileP, log } from './util.ts';
 
 export type Delivery = 'hold' | 'tmux' | 'resume' | 'queue' | 'none';
 
 const PREFIX = 'The developer said by phone (via CallMeClaude): ';
+
+/** argv for a voice-started headless session: same permission mode as resumeHeadless, session id fixed up front. */
+export function headlessStartArgs(sessionId: string, task: string): string[] {
+  return ['-p', '--session-id', sessionId, '--permission-mode', 'acceptEdits', task];
+}
 
 /**
  * Gets developer instructions into Claude Code sessions, trying in order:
@@ -17,6 +23,9 @@ const PREFIX = 'The developer said by phone (via CallMeClaude): ';
  *  4. queue for the session's next hook event
  */
 export class Controller {
+  /** Headless sessions this hub started, by session id (Linux without tmux). */
+  private headless = new Map<string, ChildProcess>();
+
   constructor(
     private st: State,
     private cfg: Config,
@@ -109,9 +118,11 @@ export class Controller {
       this.resolvePending(this.st.pending.get(hold.pendingId), 'interrupted');
     }
     if (s.tmuxPane) await execFileP('tmux', ['send-keys', '-t', s.tmuxPane, 'Escape']).catch(() => {});
+    const killed = this.stopHeadless(s.id);
     this.st.queued.delete(s.id);
-    audit('interrupt', { session: s.id, project: s.project });
-    this.mark(s, 'waiting_input', 'Stopped.');
+    audit('interrupt', { session: s.id, project: s.project, ...(killed ? { headless: true } : {}) });
+    // A stopped headless process is gone; 'ended' lets the next instruction resume it with --resume.
+    this.mark(s, killed ? 'ended' : 'waiting_input', 'Stopped.');
   }
 
   async panic() {
@@ -122,10 +133,11 @@ export class Controller {
   }
 
   /**
-   * Start a new interactive Claude Code session in a detached tmux session.
-   * `onStuck` fires if the session never gets past its startup screens.
+   * Start a new Claude Code session: a detached tmux session, or headless `claude -p` (Linux without tmux).
+   * `onStuck` fires if a tmux session never gets past its startup screens.
    */
   async startSession(dir: string, task: string, onStuck?: (why: string) => void): Promise<string> {
+    if (voiceSessionMode(this.cfg) === 'headless') return this.startHeadless(dir, task);
     const name = 'cmc-' + norm(dir.split('/').pop() ?? 'session').slice(0, 20) + '-' + Date.now().toString(36).slice(-4);
     await execFileP('tmux', ['new-session', '-d', '-s', name, '-c', dir, '-x', '200', '-y', '50', 'claude', task]);
     audit('session.start', { dir, task, tmux: name });
@@ -145,7 +157,7 @@ export class Controller {
    * configured project roots. Returns a reason string if the session is still stuck, else undefined.
    */
   private async passStartupScreens(target: string, dir: string): Promise<string | undefined> {
-    const inRoots = this.cfg.projectRoots.some((r) => dir === r || dir.startsWith(r + '/'));
+    const inRoots = inProjectRoots(this.cfg.projectRoots, dir);
     let screen = '';
     for (let i = 0; i < 90; i++) {
       await new Promise((r) => setTimeout(r, 1000));
@@ -171,6 +183,40 @@ export class Controller {
     }
     const tail = screen.trim().split('\n').slice(-4).join(' ').replace(/\s+/g, ' ').slice(0, 160);
     return `still on a startup screen after 90s: ${tail}`;
+  }
+
+  /**
+   * Linux without tmux: run the session as a detached `claude -p`. Headless mode never shows the folder trust
+   * prompt, so the project-roots rule that guards passStartupScreens is enforced here before anything starts.
+   */
+  private startHeadless(dir: string, task: string): string {
+    if (!inProjectRoots(this.cfg.projectRoots, dir)) {
+      audit('session.start.refused', { dir, task, reason: 'outside projectRoots' });
+      throw new Error(`Not starting a session in ${dir}: it is outside the configured project roots.`);
+    }
+    const id = randomUUID();
+    // No TMUX_PANE: if the hub itself runs inside tmux, the hooks must not report the hub's pane for this session.
+    const { TMUX: _t, TMUX_PANE: _p, ...env } = process.env;
+    const child = spawn('claude', headlessStartArgs(id, task), { cwd: dir, detached: true, stdio: 'ignore', env });
+    child.on('error', (e) => log.warn('headless session failed to start', dir, e.message));
+    child.on('exit', () => this.headless.delete(id));
+    child.unref();
+    this.headless.set(id, child);
+    audit('session.start', { dir, task, headless: id, pid: child.pid });
+    return id;
+  }
+
+  /** Stop a headless session this hub started (its whole process group). */
+  private stopHeadless(sessionId: string): boolean {
+    const child = this.headless.get(sessionId);
+    if (!child?.pid || child.exitCode !== null) return false;
+    try {
+      process.kill(-child.pid, 'SIGTERM');
+    } catch {
+      return false;
+    }
+    this.headless.delete(sessionId);
+    return true;
   }
 
   private resumeHeadless(s: Session, text: string) {

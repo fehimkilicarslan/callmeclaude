@@ -18,6 +18,24 @@ jobs:
       - run: pnpm --filter @callmeclaude/mac-agent typecheck
       - run: pnpm --filter @callmeclaude/mac-agent test
 
+  hub-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Install the X11 computer-use tools (Xvfb, xdotool, scrot; xclip and zenity for the paste test)
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends xvfb xdotool scrot xclip zenity dbus-daemon
+      - run: pnpm --filter @callmeclaude/mac-agent typecheck
+      - run: pnpm --filter @callmeclaude/mac-agent test
+        env:
+          # test/x11-driver.test.ts starts its own Xvfb; here a missing tool fails instead of skipping.
+          CMC_REQUIRE_X11: '1'
+
   ios:
     runs-on: macos-latest
     steps:
@@ -30,3 +48,21 @@ jobs:
           xcodegen generate
           xcodebuild -project CallMeClaude.xcodeproj -scheme CallMeClaude -configuration Debug \
             -destination 'generic/platform=iOS' CODE_SIGNING_ALLOWED=NO build
+
+  android:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/android
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+          cache: gradle
+          cache-dependency-path: |
+            apps/android/**/*.gradle.kts
+            apps/android/gradle/libs.versions.toml
+            apps/android/gradle/wrapper/gradle-wrapper.properties
+      - run: ./gradlew assembleDebug test --console=plain

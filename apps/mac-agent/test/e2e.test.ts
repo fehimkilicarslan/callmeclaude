@@ -153,7 +153,8 @@ test('"call me when done" rings even in desk mode, once, for the session started
   // An unrelated session already open in the same folder must not consume the callback.
   await hook('SessionStart', { session_id: 'old', cwd: '/x/game', source: 'startup' });
   hub.st.addCallback({ dir: '/x/game' });
-  await hook('SessionStart', { session_id: 'new', cwd: '/x/game', source: 'startup' });
+  // SessionStart never arrives over HTTP hooks: the first hook of the new session binds the callback.
+  await hook('UserPromptSubmit', { session_id: 'new', cwd: '/x/game', prompt: 'redesign the lobby' });
   assert.equal(hub.st.hasCallback(hub.st.sessions.get('new')), true);
   assert.equal(hub.st.hasCallback(hub.st.sessions.get('old')), false);
   const quiet = await hook('Stop', { session_id: 'old', cwd: '/x/game', stop_hook_active: false, last_assistant_message: 'Done.' });
