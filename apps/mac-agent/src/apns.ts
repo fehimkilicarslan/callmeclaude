@@ -1,6 +1,7 @@
 import { connect } from 'node:http2';
 import { createPrivateKey, sign } from 'node:crypto';
 import type { Config } from './config.ts';
+import type { DoctorResult } from './platform/types.ts';
 import { getSecret } from './secrets.ts';
 import { log } from './util.ts';
 
@@ -15,6 +16,28 @@ function jwt(cfg: Config['apns'], p8: string) {
   const token = `${head}.${claims}.${sig.toString('base64url')}`;
   cachedJwt = { token, at: Date.now() };
   return token;
+}
+
+const APNS_FLAGS = 'cmc setup --apns-key-file AuthKey_XXX.p8 --apns-key-id XXX --team-id XXX --bundle-id XXX';
+
+/**
+ * What setup and doctor say about APNs. APNs only wakes the iPhone app; the Android app keeps its own
+ * connection to the hub and rings in the background without it. macOS texts are unchanged.
+ */
+export function apnsTexts(os: NodeJS.Platform): { setupMissing: string; doctorName: string; doctorMissing: DoctorResult } {
+  if (os === 'linux') {
+    return {
+      setupMissing: `⚠️  APNs not configured (an iPhone rings only while the CallMeClaude app is open; the Android app is not affected, it rings in the background over its own connection): ${APNS_FLAGS}`,
+      doctorName: 'APNs (hub can ring an iPhone in the background)',
+      // Not a problem on Linux: only an iPhone needs APNs, so doctor shows a note instead of ❌.
+      doctorMissing: { info: 'not configured: needed only to ring an iPhone in the background (the Android app is not affected)' },
+    };
+  }
+  return {
+    setupMissing: `⚠️  APNs not configured (the hub can only ring the phone while the app is open): ${APNS_FLAGS}`,
+    doctorName: 'APNs (hub can ring the phone)',
+    doctorMissing: '!not configured',
+  };
 }
 
 export function apnsConfigured(cfg: Config) {

@@ -62,6 +62,32 @@ export function detectComputerEnv(env: Env): ComputerEnv {
   return { session, desktop, desktopName, sessionType: type, display: session === 'wayland' ? env.WAYLAND_DISPLAY : session === 'x11' ? env.DISPLAY : undefined };
 }
 
+// ---------- desktop session environment ----------
+
+/** What the computer task needs to reach the desktop; a hub started before the desktop login (linger) lacks them. */
+export const SESSION_VARS = ['DISPLAY', 'WAYLAND_DISPLAY', 'XDG_SESSION_TYPE', 'XDG_CURRENT_DESKTOP', 'DBUS_SESSION_BUS_ADDRESS'] as const;
+const GRAPHICAL_VARS = SESSION_VARS.filter((v) => v !== 'DBUS_SESSION_BUS_ADDRESS');
+
+/**
+ * The environment a computer task runs with (pure). When the hub's own environment shows no display, the
+ * graphical variables come from the systemd user manager (`systemctl --user show-environment`, which the
+ * desktop fills at login) as one set, so a stale XDG_SESSION_TYPE=tty cannot mix with a Wayland display.
+ * DBUS_SESSION_BUS_ADDRESS is filled on its own when missing. Variables the hub already has are kept.
+ * Returns the merged environment and the values taken from systemd (given to the agent process; the hub's
+ * own environment is never changed).
+ */
+export function desktopSessionEnv(proc: Env, systemd: Env): { env: Env; fromSystemd: Record<string, string> } {
+  const fromSystemd: Record<string, string> = {};
+  if (!proc.DISPLAY && !proc.WAYLAND_DISPLAY && (systemd.DISPLAY || systemd.WAYLAND_DISPLAY)) {
+    for (const v of GRAPHICAL_VARS) if (systemd[v]) fromSystemd[v] = systemd[v]!;
+  }
+  if (!proc.DBUS_SESSION_BUS_ADDRESS && systemd.DBUS_SESSION_BUS_ADDRESS) fromSystemd.DBUS_SESSION_BUS_ADDRESS = systemd.DBUS_SESSION_BUS_ADDRESS;
+  return { env: { ...proc, ...fromSystemd }, fromSystemd };
+}
+
+/** True when this environment lacks something the computer task may need (then systemd is asked). */
+export const needsSessionEnv = (proc: Env) => (!proc.DISPLAY && !proc.WAYLAND_DISPLAY) || !proc.DBUS_SESSION_BUS_ADDRESS;
+
 const X11_SHOTS: ScreenshotTool[] = ['scrot', 'import', 'maim'];
 
 /** Pick the computer-use driver for an environment. Pure: `has(bin)` answers "is it on PATH?". */
@@ -195,6 +221,48 @@ export const LINUX_EXTRA_RULES = [
   '- Every Bash command still goes through the CallMeClaude safety policy: protected paths and destructive commands are blocked. If something is blocked, do not work around it; report it.',
 ];
 
+// ---------- ydotool version ----------
+
+/**
+ * The prompt and the doctor steps use the ydotool 1.x command line (`mousemove --absolute -x -y`, `click 0xC0`,
+ * key codes, the ydotoold socket). 0.1.x (e.g. Ubuntu 22.04) has a different syntax, so it is ignored.
+ */
+export interface YdotoolVersion {
+  /** "1.0.4", or undefined when only the command signature was recognised. */
+  version?: string;
+  major?: number;
+  /** true only for 1.x. */
+  supported: boolean;
+}
+
+/**
+ * ydotool's version from what the hub could read (pure). `pkg` is the package manager's answer
+ * (`pacman -Q ydotool` → "ydotool 1:1.0.4-2", `dpkg-query -W -f '${Version}' ydotool` → "0.1.8-3",
+ * `rpm -q --qf '%{VERSION}' ydotool` → "1.0.4"); `cli` is the output of `ydotool --version` and `ydotool --help`.
+ * The package version wins; then a version number in the CLI output; then the command list
+ * (1.x lists "bakers" and mentions YDOTOOL_SOCKET; 0.1.x has "recorder" / "getmouselocation").
+ */
+export function ydotoolVersion(o: { pkg?: string; cli?: string }): YdotoolVersion {
+  const fromPkg = o.pkg?.trim().split(/\s+/).pop()?.replace(/^\d+:/, '');
+  const num = (s?: string) => s?.match(/(?:^|[^\w.])v?(\d+)\.(\d+)(?:\.(\d+))?/);
+  const m = (fromPkg && /^\d/.test(fromPkg) ? num(fromPkg) : undefined) ?? num(o.cli);
+  if (m) {
+    const major = Number(m[1]);
+    return { version: [m[1], m[2], m[3]].filter((x) => x !== undefined).join('.'), major, supported: major === 1 };
+  }
+  const cli = o.cli ?? '';
+  if (/\bbakers\b|YDOTOOL_SOCKET/.test(cli)) return { major: 1, supported: true };
+  if (/\brecorder\b|\bgetmouselocation\b|mousemove_relative/.test(cli)) return { major: 0, supported: false };
+  return { supported: false };
+}
+
+export const YDOTOOL_REQUIRED = 'ydotool 1.x required';
+
+/** Doctor text for an installed ydotool that is not 1.x. */
+export function ydotoolTooOld(v: YdotoolVersion) {
+  return `${YDOTOOL_REQUIRED} (found ${v.version ? `ydotool ${v.version}` : 'a ydotool whose version could not be read'}); it is ignored. Install ydotool 1.x: a newer distribution package, or build it from https://github.com/ReimuNotMoe/ydotool`;
+}
+
 // ---------- install hints (doctor) ----------
 
 export type PackageManager = 'apt' | 'dnf' | 'pacman';
@@ -230,9 +298,14 @@ export const UINPUT_RISK = 'Security cost: once this is allowed, every program r
  * One-time, optional, run by the user: ydotool and its access to /dev/uinput via a dedicated group
  * (not "input", which could also read keyboards). Only the steps that are still missing.
  */
-export function uinputSteps(pm: PackageManager | undefined, user: string, o: { installed: boolean; uinput: boolean; daemon: boolean; userUnit: boolean }) {
+export function uinputSteps(
+  pm: PackageManager | undefined,
+  user: string,
+  o: { installed: boolean; uinput: boolean; daemon: boolean; userUnit: boolean; tooOld?: YdotoolVersion },
+) {
   const steps: string[] = [];
-  if (!o.installed) steps.push(installCommand(pm, ['ydotool']));
+  if (o.tooOld) steps.push(ydotoolTooOld(o.tooOld));
+  else if (!o.installed) steps.push(installCommand(pm, ['ydotool']));
   if (!o.uinput) {
     steps.push(
       `sudo groupadd -f uinput && sudo usermod -aG uinput ${user}`,

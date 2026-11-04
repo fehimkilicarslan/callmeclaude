@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { defaultConfig, inProjectRoots, planVoiceSessions, voiceSessionMode } from '../src/config.ts';
+import { defaultConfig, inProjectRoots, parseVoiceSessionsAnswer, planVoiceSessions, voiceSessionMode } from '../src/config.ts';
 import { headlessStartArgs } from '../src/controller.ts';
 
 const plan = (os: NodeJS.Platform, flags: Record<string, unknown>, interactive = false, tmuxInstalled = true) =>
@@ -51,4 +51,20 @@ test('project roots: the root itself and folders inside it, not look-alike sibli
   assert.ok(!inProjectRoots(roots, '/home/u/code-old/app'));
   assert.ok(!inProjectRoots(roots, '/etc'));
   assert.ok(!inProjectRoots([], '/home/u/code'));
+});
+
+test('setup question on Linux: empty = default, 1/2 or the names, anything else asks again', () => {
+  const p = parseVoiceSessionsAnswer;
+  // tmux installed: 1) tmux (default) 2) headless
+  assert.equal(p('', true), 'tmux');
+  assert.equal(p('  ', true), 'tmux');
+  assert.equal(p('1', true), 'tmux');
+  assert.equal(p('2', true), 'headless');
+  // tmux missing: 1) headless (default) 2) tmux
+  assert.equal(p('', false), 'headless');
+  assert.equal(p('1', false), 'headless');
+  assert.equal(p('2', false), 'tmux');
+  assert.equal(p('TMUX', false), 'tmux');
+  assert.equal(p(' headless ', true), 'headless');
+  for (const bad of ['3', '0', 'y', 'yes', '12', '1 2', 'x']) assert.equal(p(bad, true), undefined, bad);
 });

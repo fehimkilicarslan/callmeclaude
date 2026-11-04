@@ -55,12 +55,13 @@ export async function computerTask(hub: Hub, task: string, project?: string): Pr
       ? `\nRelated Claude Code session: ${s.project} (${s.cwd}). Its last message:\n"""${clip(s.lastMessage, 2500)}"""\n`
       : '';
     const system = computerSystemPrompt(plan, hub.cfg.language);
-    audit('computer.start', { task, project: s?.project, ...(platform.id === 'darwin' ? {} : { driver: plan.driver }) });
+    audit('computer.start', { task, project: s?.project, ...(platform.id === 'darwin' ? {} : { driver: plan.driver, ...(plan.env ? { sessionFrom: 'systemd' } : {}) }) });
     const result = await runAgent({
       task: `${context}\nTASK: ${task}`,
       model: hub.cfg.claude.computerModel,
       system,
       mcpServers: plan.mcpServers,
+      env: plan.env,
       extraArgs: hub.cfg.claude.useChrome ? { chrome: null } : undefined,
       canUseTool: guard('computer'),
       maxTurns: 60,

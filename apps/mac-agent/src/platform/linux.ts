@@ -1,4 +1,4 @@
-import { execFileSync, spawn } from 'node:child_process';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { accessSync, constants, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir, userInfo } from 'node:os';
 import { delimiter, dirname, join } from 'node:path';
@@ -7,7 +7,10 @@ import { execFileP } from '../util.ts';
 import { binPath, SERVICE_LABEL } from './common.ts';
 import { SecretStoreError, type Platform } from './types.ts';
 import {
+  desktopSessionEnv,
   envSummary,
+  needsSessionEnv,
+  SESSION_VARS,
   installCommand,
   LINUX_EXTRA_RULES,
   linuxToolsBlock,
@@ -15,22 +18,30 @@ import {
   selectComputerDriver,
   UINPUT_RISK,
   uinputSteps,
+  ydotoolTooOld,
+  ydotoolVersion,
   type ComputerDriver,
+  type YdotoolVersion,
 } from './computerUse.ts';
 
 const UNIT_NAME = `${SERVICE_LABEL}.service`;
 const UNIT_PATH = join(homedir(), '.config', 'systemd', 'user', UNIT_NAME);
 
-/** Is `bin` an executable somewhere on PATH? */
-export function onPath(bin: string, path = process.env.PATH ?? '') {
+/** Full path of `bin` on PATH, or undefined. */
+export function which(bin: string, path = process.env.PATH ?? '') {
   for (const dir of path.split(delimiter)) {
     if (!dir) continue;
     try {
       accessSync(join(dir, bin), constants.X_OK);
-      return true;
+      return join(dir, bin);
     } catch {}
   }
-  return false;
+  return undefined;
+}
+
+/** Is `bin` an executable somewhere on PATH? */
+export function onPath(bin: string, path = process.env.PATH ?? '') {
+  return which(bin, path) !== undefined;
 }
 
 /** Same idea as the launchd PATH: system bins, the user's ~/.local/bin, and the directory of the running node. */
@@ -83,8 +94,40 @@ export function parseConf(text: string) {
   return out;
 }
 
-/** The computer-use driver for this process's environment and PATH. */
-export const linuxComputerDriver = (env: NodeJS.ProcessEnv = process.env) => selectComputerDriver(env, (b) => onPath(b, env.PATH));
+/** Output of a short, read-only command (version/help/package query); '' when it fails. Never sends input. */
+function readOnly(cmd: string, args: string[], o: { stderr?: boolean } = {}) {
+  const r = spawnSync(cmd, args, { encoding: 'utf8', timeout: 3000, stdio: ['ignore', 'pipe', 'pipe'] });
+  if (r.error) return '';
+  if (!o.stderr) return r.status === 0 ? r.stdout : '';
+  return `${r.stdout ?? ''}${r.stderr ?? ''}`;
+}
+
+/**
+ * ydotool's version, or undefined when it is not on PATH. The package version is asked only when the binary
+ * is the distribution's (/usr/bin, /bin); a ydotool built into /usr/local/bin is judged by its own output.
+ * Only `--version` / `--help` are run: they print and exit, they never send input.
+ */
+export function probeYdotool(path = process.env.PATH ?? ''): YdotoolVersion | undefined {
+  const bin = which('ydotool', path);
+  if (!bin) return undefined;
+  let pkg = '';
+  if (/^\/(usr\/)?bin\//.test(bin)) {
+    const pm = packageManager(osRelease());
+    if (pm === 'pacman') pkg = readOnly('pacman', ['-Q', 'ydotool']);
+    else if (pm === 'apt') pkg = readOnly('dpkg-query', ['-W', '-f=${Version}', 'ydotool']);
+    else if (pm === 'dnf') pkg = readOnly('rpm', ['-q', '--qf', '%{VERSION}', 'ydotool']);
+  }
+  const cli = `${readOnly(bin, ['--version'], { stderr: true })}\n${readOnly(bin, ['--help'], { stderr: true })}`;
+  return ydotoolVersion({ pkg: pkg || undefined, cli });
+}
+
+/**
+ * The computer-use driver for this environment and PATH. A ydotool that is not 1.x counts as absent
+ * (its command line differs from the one the agent is told to use).
+ */
+export function linuxComputerDriver(env: NodeJS.ProcessEnv = process.env, ydotool: YdotoolVersion | undefined = probeYdotool(env.PATH)) {
+  return selectComputerDriver(env, (b) => (b === 'ydotool' ? !!ydotool?.supported && onPath(b, env.PATH) : onPath(b, env.PATH)));
+}
 
 /** Browser config dirs where Claude Code installs its Claude in Chrome native messaging host. */
 const BROWSER_DIRS = ['google-chrome', 'google-chrome-beta', 'chromium', 'microsoft-edge', 'BraveSoftware/Brave-Browser', 'vivaldi'];
@@ -128,14 +171,43 @@ function driverReport(d: ComputerDriver) {
   return parts[0];
 }
 
-/** Parse `systemctl --user show-environment` output (NAME=value lines). */
+/** Undo systemd's $'…' quoting of values with special characters (show-environment, systemd ≥ 240). */
+function unquoteSystemd(v: string) {
+  const m = v.match(/^\$'(.*)'$/s);
+  if (!m) return v;
+  return m[1].replace(/\\(x[0-9a-fA-F]{2}|[0-7]{3}|.)/g, (_, e: string) => {
+    if (e.length === 3 && e[0] === 'x') return String.fromCharCode(parseInt(e.slice(1), 16));
+    if (/^[0-7]{3}$/.test(e)) return String.fromCharCode(parseInt(e, 8));
+    return ({ n: '\n', t: '\t', r: '\r', a: '\x07', b: '\b', f: '\f', v: '\v', e: '\x1b' } as Record<string, string>)[e] ?? e;
+  });
+}
+
+/** Parse `systemctl --user show-environment` output (NAME=value lines, $'…' values unquoted). */
 export function parseEnvBlock(text: string) {
   const out: Record<string, string> = {};
   for (const line of text.split('\n')) {
     const m = line.match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/);
-    if (m) out[m[1]] = m[2];
+    if (m) out[m[1]] = unquoteSystemd(m[2]);
   }
   return out;
+}
+
+/** The systemd user manager's environment (read only); {} when systemctl is unavailable. */
+async function systemdUserEnv() {
+  try {
+    return parseEnvBlock((await execFileP('systemctl', ['--user', 'show-environment'], { timeout: 5000 })).stdout);
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * This process's environment completed with the desktop session from systemd when it lacks one
+ * (the hub started at boot by linger, before anyone logged in to the desktop). Nothing is written to process.env.
+ */
+export async function linuxSessionEnv(proc: NodeJS.ProcessEnv = process.env) {
+  if (!needsSessionEnv(proc)) return { env: proc, fromSystemd: {} as Record<string, string> };
+  return desktopSessionEnv(proc, await systemdUserEnv());
 }
 
 const SLEEP_TARGETS = ['sleep.target', 'suspend.target', 'hibernate.target', 'hybrid-sleep.target'];
@@ -249,7 +321,8 @@ export const linux: Platform = {
   ],
 
   async computerUse({ useChrome }) {
-    const d = linuxComputerDriver();
+    const session = await linuxSessionEnv();
+    const d = linuxComputerDriver(session.env);
     const browser = useChrome && chromeHosts().length > 0;
     if (!d.desktop && !browser) {
       return {
@@ -271,6 +344,7 @@ export const linux: Platform = {
       toolsBlock: linuxToolsBlock(d, { shotDir, browser }),
       extraRules: LINUX_EXTRA_RULES,
       mcpServers: {},
+      ...(Object.keys(session.fromSystemd).length ? { env: session.fromSystemd } : {}),
       usable: true,
       cleanup() {
         if (shotDir) rmSync(shotDir, { recursive: true, force: true });
@@ -312,14 +386,17 @@ export const linux: Platform = {
   },
 
   async diagnostics() {
+    const { env, fromSystemd } = await linuxSessionEnv();
     return {
       node: process.execPath,
       platform: `linux ${process.arch}`,
       shell: linuxShell(),
-      display: process.env.WAYLAND_DISPLAY ? `wayland (${process.env.WAYLAND_DISPLAY})` : process.env.DISPLAY ? `x11 (${process.env.DISPLAY})` : 'none',
+      display:
+        (env.WAYLAND_DISPLAY ? `wayland (${env.WAYLAND_DISPLAY})` : env.DISPLAY ? `x11 (${env.DISPLAY})` : 'none') +
+        (Object.keys(fromSystemd).length ? ' (from systemd --user)' : ''),
       secretTool: onPath('secret-tool') ? 'found' : 'missing',
       computerUse: (() => {
-        const d = linuxComputerDriver();
+        const d = linuxComputerDriver(env);
         return `${d.id} (${envSummary(d.env)}): screenshot ${d.screenshot ?? 'none'}, input ${d.input ?? 'none'}`;
       })(),
       chrome: chromeHosts().join(', ') || 'native host not installed',
@@ -327,9 +404,28 @@ export const linux: Platform = {
   },
 };
 
+const IMPORT_ENV = `systemctl --user import-environment ${SESSION_VARS.join(' ')}`;
+
+/**
+ * Doctor: what a hub service started without a desktop (linger) will find when a computer task starts.
+ * It reads the session from the systemd user manager then, so only the manager's environment matters (pure).
+ */
+export function serviceSessionReport(systemdEnv: Record<string, string>, shell: ComputerDriver, ydotool?: YdotoolVersion): string {
+  const { env, fromSystemd } = desktopSessionEnv({}, systemdEnv);
+  if (!fromSystemd.DISPLAY && !fromSystemd.WAYLAND_DISPLAY) {
+    return `!systemd --user has no DISPLAY or WAYLAND_DISPLAY yet, so a computer task cannot reach the desktop. The hub reads them from systemd --user when a computer task starts; most desktops put them there at login. If they are still missing while you are logged in → ${IMPORT_ENV} (no restart needed)`;
+  }
+  const svc = linuxComputerDriver({ ...env, PATH: process.env.PATH }, ydotool);
+  if (svc.id !== shell.id) {
+    return `!systemd --user gives "${svc.id}", this shell "${shell.id}"; the hub uses the systemd values → ${IMPORT_ENV} (no restart needed)`;
+  }
+  return `${svc.id} (read from systemd --user when a computer task starts)`;
+}
+
 /** Doctor checks for computer use: detect, report and advise only. Nothing here changes the system. */
 function computerUseChecks() {
-  const d = linuxComputerDriver();
+  const ydotool = probeYdotool();
+  const d = linuxComputerDriver(process.env, ydotool);
   const pm = packageManager(osRelease());
   const user = process.env.USER || userInfo().username;
   const checks: { name: string; fn: () => Promise<boolean | string> }[] = [
@@ -353,25 +449,23 @@ function computerUseChecks() {
           userUnit = true;
         } catch {}
         const installed = d.input === 'ydotool';
+        const tooOld = ydotool && !ydotool.supported ? ydotool : undefined;
         const uinput = canWrite('/dev/uinput');
         const sock = ydotoolSocket();
-        if (installed && uinput && sock) return `ready (ydotoold socket ${sock}). ${UINPUT_RISK.replace('once this is allowed', 'because it is allowed')}`;
-        const state = [`ydotool ${installed ? 'installed' : 'not installed'}`, `/dev/uinput ${uinput ? 'already writable' : 'not writable for ' + user}`, `ydotoold ${sock ? 'running' : 'not running'}`];
-        const steps = uinputSteps(pm, user, { installed, uinput, daemon: !!sock, userUnit });
+        if (installed && uinput && sock) return `ready (ydotool ${ydotool?.version ?? '1.x'}, ydotoold socket ${sock}). ${UINPUT_RISK.replace('once this is allowed', 'because it is allowed')}`;
+        const state = [
+          tooOld ? ydotoolTooOld(tooOld).split(';')[0] : `ydotool ${installed ? 'installed' : 'not installed'}`,
+          `/dev/uinput ${uinput ? 'already writable' : 'not writable for ' + user}`,
+          `ydotoold ${sock ? 'running' : 'not running'}`,
+        ];
+        const steps = uinputSteps(pm, user, { installed, uinput, daemon: !!sock, userUnit, tooOld });
         return `!${state.join(', ')}. One-time setup, run it yourself only if you want this:${ind(steps.map((x, i) => `${i + 1}. ${x}`))}${ind([UINPUT_RISK])}`;
       },
     });
   }
   checks.push({
     name: 'Computer use: hub service sees the desktop',
-    fn: async () => {
-      const { stdout } = await execFileP('systemctl', ['--user', 'show-environment']);
-      const env = parseEnvBlock(stdout);
-      const vars = ['WAYLAND_DISPLAY', 'DISPLAY', 'XDG_SESSION_TYPE', 'XDG_CURRENT_DESKTOP'];
-      const svc = selectComputerDriver(Object.fromEntries(vars.map((v) => [v, env[v]])), (b) => onPath(b));
-      if (svc.id === d.id) return `${svc.id}`;
-      return `!service environment gives "${svc.id}" (this shell: "${d.id}") → systemctl --user import-environment ${vars.join(' ')}, then cmc restart`;
-    },
+    fn: async () => serviceSessionReport(parseEnvBlock((await execFileP('systemctl', ['--user', 'show-environment'])).stdout), d, ydotool),
   });
   checks.push({
     name: 'Computer use: browser (Claude in Chrome)',

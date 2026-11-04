@@ -8,13 +8,15 @@ import qrcode from 'qrcode-terminal';
 import QR from 'qrcode';
 import type { PairingInfo } from '@callmeclaude/protocol';
 import { PROTOCOL_VERSION } from '@callmeclaude/protocol';
-import { CONFIG_PATH, LOG_DIR, loadConfig, planVoiceSessions, saveConfig, voiceSessionMode, type Mode, type VoiceSessions } from './config.ts';
+import { CONFIG_PATH, LOG_DIR, loadConfig, parseVoiceSessionsAnswer, planVoiceSessions, saveConfig, voiceSessionMode, type Mode, type VoiceSessions } from './config.ts';
 import { getSecret, setSecret } from './secrets.ts';
 import { hooksInstalled, installHooks, installService, restartService, uninstallHooks, uninstallService, SERVICE } from './install.ts';
 import { platform, SecretStoreError } from './platform/index.ts';
+import type { DoctorResult } from './platform/types.ts';
 import { onPath } from './platform/linux.ts';
 import { execFileP } from './util.ts';
-import { apnsConfigured } from './apns.ts';
+import { apnsConfigured, apnsTexts } from './apns.ts';
+import { doctorLine, pairTexts, voipTokenTexts } from './cliTexts.ts';
 
 const [cmd = 'help', ...rest] = process.argv.slice(2);
 const flags = parseFlags(rest);
@@ -35,8 +37,6 @@ function parseFlags(a: string[]) {
   (f as any)._ = pos;
   return f as Record<string, string | true> & { _: string[] };
 }
-
-const ok = (b: boolean) => (b ? '✅' : '❌');
 
 async function api(path: string, body?: object) {
   const cfg = loadConfig();
@@ -84,10 +84,14 @@ async function askVoiceSessions(tmuxInstalled: boolean): Promise<VoiceSessions> 
     console.log('                then you can watch voice-started sessions with `tmux attach`');
   }
   const rl = createInterface({ input: process.stdin, output: process.stdout });
+  // stdin closed (Ctrl+D): take the default instead of hanging.
+  const closed = new Promise<string>((r) => rl.once('close', () => r('')));
   try {
-    const a = (await rl.question('Choice [1]: ')).trim();
-    const second = a === '2';
-    return tmuxInstalled === second ? 'headless' : 'tmux';
+    for (;;) {
+      const choice = parseVoiceSessionsAnswer(await Promise.race([rl.question('Choice [1]: '), closed]), tmuxInstalled);
+      if (choice) return choice;
+      console.log('Please answer 1 or 2 (or press Enter for 1).');
+    }
   } finally {
     rl.close();
   }
@@ -152,7 +156,7 @@ async function main() {
         console.log(`✅ ${SERVICE.displayName} service installed: ${SERVICE.definitionPath}`);
       }
       if (!getSecret('gemini-api-key')) console.log('⚠️  No Gemini API key: cmc setup --gemini-key <KEY>  (https://aistudio.google.com/apikey)');
-      if (!apnsConfigured(cfg)) console.log('⚠️  APNs not configured (the hub can only ring the phone while the app is open): cmc setup --apns-key-file AuthKey_XXX.p8 --apns-key-id XXX --team-id XXX --bundle-id XXX');
+      if (!apnsConfigured(cfg)) console.log(apnsTexts(platform.id).setupMissing);
       console.log(`Voice language: ${cfg.language}  (change with --language, e.g. en-US, tr-TR, de-DE)`);
       if (sessions) {
         console.log(`Voice-started sessions: ${sessions}  (change with --tmux / --no-tmux)`);
@@ -182,9 +186,10 @@ async function main() {
       const png = join(CONFIG_PATH, '..', 'pair.png');
       await QR.toFile(png, text, { width: 640, margin: 2 });
       if (!flags['no-open']) platform.openFile(png);
-      console.log('\nIn the CallMeClaude app tap "Pair Mac" and scan this QR code. To enter it manually:\n');
+      const say = pairTexts(platform.id);
+      console.log(say.scan);
       console.log(text);
-      if (!ts.ip) console.log('\n⚠️  Tailscale is not connected: to reach this Mac on the road, log in to Tailscale on the Mac and the phone, then run `cmc pair` again.');
+      if (!ts.ip) console.log(say.noTailscale);
       return;
     }
 
@@ -303,10 +308,9 @@ async function main() {
 
 async function doctor() {
   const cfg = loadConfig();
-  const check = async (name: string, fn: () => Promise<boolean | string>) => {
+  const check = async (name: string, fn: () => Promise<DoctorResult>) => {
     try {
-      const r = await fn();
-      console.log(`${ok(r === true || (typeof r === 'string' && !r.startsWith('!')))} ${name}${typeof r === 'string' ? ': ' + r.replace(/^!/, '') : ''}`);
+      console.log(doctorLine(name, await fn()));
     } catch (e) {
       console.log(`❌ ${name}: ${(e as Error).message}`);
     }
@@ -322,12 +326,12 @@ async function doctor() {
     return r.ok;
   });
   await check('Gemini API key', async () => !!getSecret('gemini-api-key'));
-  await check('APNs (hub can ring the phone)', async () => (apnsConfigured(cfg) ? `${cfg.apns.environment}` : '!not configured'));
-  await check('Phone registered (VoIP token)', async () => {
+  const apns = apnsTexts(platform.id);
+  await check(apns.doctorName, async () => (apnsConfigured(cfg) ? `${cfg.apns.environment}` : apns.doctorMissing));
+  const voip = voipTokenTexts(platform.id);
+  await check(voip.doctorName, async () => {
     const p = join(CONFIG_PATH, '..', 'devices.json');
-    if (!existsSync(p)) return '!not paired yet';
-    const d = JSON.parse(readFileSync(p, 'utf8'));
-    return Object.values(d).some((x: any) => x.voipToken) ? Object.keys(d).join(', ') : '!no token yet';
+    return voip.result(existsSync(p) ? JSON.parse(readFileSync(p, 'utf8')) : undefined);
   });
   await check('Tailscale', async () => {
     const t = await tailscaleInfo();

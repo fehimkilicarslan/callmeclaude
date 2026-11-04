@@ -27,5 +27,5 @@ Hub'ın computer task'i macOS'ta Peekaboo, cliclick, screencapture ve osascript 
 - ✅ Tek arayüz, saf ve test edilen sürücü matrisi; CI X11 sürücüsünü gerçek bir Xvfb'de dener.
 - ⚠️ GNOME Wayland'de masaüstü kontrolü yok, yalnızca tarayıcı var.
 - ⚠️ Wayland'de işaretçi konumu ölçülmedi; ölçekli ve çoklu monitörlü kurulumlarda sapabilir.
-- ⚠️ Talimatlar ydotool 1.x sözdizimi içindir; eski dağıtımlar 0.1.x paketliyor olabilir (Ubuntu 22.04 için doğrulanmadı).
-- ⚠️ Hub servisi oturumdan önce başladıysa `WAYLAND_DISPLAY` veya `DISPLAY` göremeyebilir. Doctor `systemctl --user import-environment` önerir.
+- ⚠️ Talimatlar ydotool 1.x sözdizimi içindir; eski dağıtımlar 0.1.x paketliyor olabilir (Ubuntu 22.04 için doğrulanmadı). Güncelleme: Hub sürümü algılar, 1.x olmayan ydotool'u yok sayar ve doctor "ydotool 1.x required" der.
+- ⚠️ Hub servisi oturumdan önce başladıysa `WAYLAND_DISPLAY` veya `DISPLAY` göremeyebilir. Güncelleme: computer task başlarken bu değerler süreç ortamında yoksa Hub onları `systemctl --user show-environment`'tan okur ve yalnızca o görevin ajanına verir; doctor ancak systemd'de de yoksa `import-environment` önerir (yeniden başlatma gerekmez).

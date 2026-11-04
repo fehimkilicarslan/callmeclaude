@@ -17,6 +17,7 @@ import { randomUUID } from 'node:crypto';
 import { parseArgs } from 'node:util';
 import WebSocket from 'ws';
 import { MIC_SAMPLE_RATE, SPEAKER_SAMPLE_RATE, type AppToHub, type HubToApp } from '@callmeclaude/protocol';
+import { callEndedKind, EndedCalls } from './desk-phone-calls.ts';
 
 const { values: opt } = parseArgs({
   options: {
@@ -72,6 +73,8 @@ interface Call {
 
 let ws: WebSocket | undefined;
 let call: Call | undefined;
+/** Calls we have ended, so the hub's confirming call.ended is not reported as "other call". */
+const ended = new EndedCalls();
 let quitting = false;
 
 // ---------- connection ----------
@@ -153,10 +156,13 @@ function onControl(m: HubToApp) {
       startMic();
       return;
     }
-    case 'call.ended':
-      if (!call || call.callId !== m.callId) return say(`ignoring call.ended for other call ${m.callId} (${m.reason})`);
+    case 'call.ended': {
+      const kind = callEndedKind(call?.callId, m.callId, ended);
+      if (kind === 'own') return;
+      if (kind === 'other') return say(`ignoring call.ended for other call ${m.callId} (${m.reason})`);
       say(`call.ended ${m.callId}: ${m.reason}`);
       return endCall(false);
+    }
     case 'audio.flush':
       if (call) call.flushes++;
       say('audio.flush → dropping queued assistant audio');
@@ -198,6 +204,7 @@ function endCall(notifyHub: boolean) {
   const c = call;
   if (!c) return;
   call = undefined;
+  ended.add(c.callId);
   clearTimeout(c.readyTimer);
   if (notifyHub) send({ type: 'call.end', callId: c.callId });
   stopMic();

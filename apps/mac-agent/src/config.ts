@@ -114,6 +114,19 @@ export function planVoiceSessions(o: {
   return o.tmuxInstalled ? 'tmux' : 'headless';
 }
 
+/**
+ * The answer to the Linux setup question (pure). Choice 1 is the default shown first: tmux when it is installed,
+ * headless otherwise. Empty = the default; the option names work too. Anything else: undefined (ask again).
+ */
+export function parseVoiceSessionsAnswer(answer: string, tmuxInstalled: boolean): VoiceSessions | undefined {
+  const a = answer.trim().toLowerCase();
+  const [first, second]: VoiceSessions[] = tmuxInstalled ? ['tmux', 'headless'] : ['headless', 'tmux'];
+  if (a === '' || a === '1') return first;
+  if (a === '2') return second;
+  if (a === 'tmux' || a === 'headless') return a;
+  return undefined;
+}
+
 /** True if dir is one of the project roots or inside one. */
 export function inProjectRoots(roots: string[], dir: string) {
   return roots.some((r) => dir === r || dir.startsWith(r + '/'));
