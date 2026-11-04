@@ -56,6 +56,8 @@ class CallManager(
         /** Telecom said we may show our ringing UI (onShowIncomingCallUi). */
         val ringing: Boolean,
         val silenced: Boolean,
+        /** Answered and talking, but the link to the hub dropped: we're reconnecting. */
+        val reconnecting: Boolean = false,
     )
 
     data class Line(val role: String, val text: String, val final: Boolean)
@@ -75,10 +77,13 @@ class CallManager(
     private val _ui = MutableStateFlow<CallUi?>(null)
     private val _muted = MutableStateFlow(false)
     private val _speaker = MutableStateFlow(prefs.getBoolean("speaker", false))
+    private val _routes = MutableStateFlow(AudioRoutesUi.EMPTY)
     private val _transcript = MutableStateFlow<List<Line>>(emptyList())
     val ui: StateFlow<CallUi?> = _ui.asStateFlow()
     val muted: StateFlow<Boolean> = _muted.asStateFlow()
     val speaker: StateFlow<Boolean> = _speaker.asStateFlow()
+    /** Audio outputs Telecom offers for the live call, the active one marked (empty outside a call). */
+    val routes: StateFlow<AudioRoutesUi> = _routes.asStateFlow()
     val transcript: StateFlow<List<Line>> = _transcript.asStateFlow()
 
     /** Read by the mic thread: send silence instead of the microphone while true. */
@@ -132,11 +137,25 @@ class CallManager(
         micMuted = on
     }
 
+    /** Loudspeaker shortcut. Off goes back to the route used before it (see [AudioRouter]). */
     fun setSpeaker(on: Boolean) {
         _speaker.value = on
+        rememberSpeaker(on)
+        activeConnection()?.speaker(on)
+    }
+
+    /** A route picked from the call screen's output list ([AudioRoute.id]). */
+    fun selectRoute(id: String) {
+        val c = activeConnection() ?: return
+        c.routes.available.firstOrNull { it.id == id }?.let { rememberSpeaker(it.kind == AudioRoute.Kind.SPEAKER) }
+        c.select(id)
+    }
+
+    private fun activeConnection() = machine.active?.let { connections[it.callId] }
+
+    private fun rememberSpeaker(on: Boolean) {
         @SuppressLint("UseKtx") // no androidx.core dependency on purpose
         prefs.edit().putBoolean("speaker", on).apply()
-        machine.active?.let { connections[it.callId]?.route(on) }
     }
 
     // endregion
@@ -190,7 +209,15 @@ class CallManager(
 
     /** The audio route is known: apply the remembered loudspeaker choice once. */
     fun routeReady(conn: CmcConnection) {
-        if (_speaker.value) conn.route(true)
+        if (prefs.getBoolean("speaker", false)) conn.speaker(true)
+    }
+
+    /** Telecom changed the available or active routes (also when changed outside the app). */
+    fun routesChanged(conn: CmcConnection) {
+        if (conn.callId != machine.active?.callId) return
+        val r = conn.routes
+        _routes.value = r
+        if (r.current != null) _speaker.value = r.speakerOn
     }
 
     // endregion
@@ -237,6 +264,7 @@ class CallManager(
                 connectedAt = it.connectedAt,
                 ringing = ringingShownFor == it.callId,
                 silenced = silencedFor == it.callId,
+                reconnecting = machine.reconnecting,
             )
         }
         _ui.value = ui
@@ -298,6 +326,8 @@ class CallManager(
                     it.destroy()
                 }
                 setMuted(false)
+                _routes.value = AudioRoutesUi.EMPTY
+                _speaker.value = prefs.getBoolean("speaker", false)
                 ringingShownFor = null
                 silencedFor = null
                 publish()
@@ -340,7 +370,7 @@ class CallManager(
 
     companion object {
         private const val TAG = "cmc.call"
-        private const val HUB_REASON = "call"
+        private const val HUB_REASON = HubClient.REASON_CALL
         const val EXTRA_CALL_ID = "dev.callmeclaude.CALL_ID"
         const val EXTRA_TITLE = "dev.callmeclaude.TITLE"
 

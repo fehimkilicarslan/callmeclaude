@@ -19,6 +19,7 @@ class CallMeClaudeApp : Application() {
         val device = Settings.Global.getString(contentResolver, Settings.Global.DEVICE_NAME)
             ?.takeIf { it.isNotBlank() } ?: Build.MODEL
         hub = HubClient(PairingStore(this), device)
+        NetworkWatcher(this, hub::networkChanged).start()
         HubService.ensureChannels(this)
         calls = CallManager(this, hub) { m -> CallAudio(this, hub::sendBinary) { m.micMuted } }
     }

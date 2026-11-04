@@ -3,6 +3,9 @@
     xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- Bluetooth device names in the audio route picker on API 29–30 (install-time there). -->
+    <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
     <!--
         Android 17+ blocks LAN traffic for apps targeting SDK 37 unless this runtime permission
         (NEARBY_DEVICES group) is granted; the hub is usually reached by LAN IP. Older releases
