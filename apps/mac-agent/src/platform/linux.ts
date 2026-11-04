@@ -11,8 +11,9 @@ import {
   envSummary,
   needsSessionEnv,
   SESSION_VARS,
+  blockedInput,
   installCommand,
-  LINUX_EXTRA_RULES,
+  linuxExtraRules,
   linuxToolsBlock,
   packageManager,
   selectComputerDriver,
@@ -25,6 +26,11 @@ import {
 } from './computerUse.ts';
 
 const UNIT_NAME = `${SERVICE_LABEL}.service`;
+
+const shq = (s: string) => (/^[\w@%+=:,./-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`);
+
+/** How the computer task's agent runs the hub's type-text helper (this node, this checkout's cmc). */
+export const typeTextCommand = () => `${shq(process.execPath)} ${shq(binPath())} type-text`;
 const UNIT_PATH = join(homedir(), '.config', 'systemd', 'user', UNIT_NAME);
 
 /** Full path of `bin` on PATH, or undefined. */
@@ -165,7 +171,7 @@ const ind = (lines: string[]) => lines.map((l) => `\n      ${l}`).join('');
 
 function driverReport(d: ComputerDriver) {
   if (d.env.session === 'none') return `!${d.notes.join(' ')}`;
-  const parts = [`${d.id}: screenshot ${d.screenshot ?? '—'}, input ${d.input ?? '—'}`];
+  const parts = [`${d.id}: screenshot ${d.screenshot ?? '—'}, input ${d.input ?? '—'}, clipboard ${d.clipboard ?? '—'}`];
   if (!d.desktop) return `!${parts[0]}. ${d.notes.join(' ')}`;
   if (!d.input) return `!${parts[0]}. Look-only: no mouse/keyboard tool${d.env.session === 'wayland' ? ' (ydotool, see below)' : ''}.`;
   return parts[0];
@@ -341,8 +347,8 @@ export const linux: Platform = {
     return {
       driver: d.id,
       subject: 'computer',
-      toolsBlock: linuxToolsBlock(d, { shotDir, browser }),
-      extraRules: LINUX_EXTRA_RULES,
+      toolsBlock: linuxToolsBlock(d, { shotDir, browser, typeCmd: typeTextCommand() }),
+      extraRules: linuxExtraRules(d),
       mcpServers: {},
       ...(Object.keys(session.fromSystemd).length ? { env: session.fromSystemd } : {}),
       usable: true,
@@ -383,6 +389,7 @@ export const linux: Platform = {
       'systemctl\\s+.*\\b(stop|disable|mask|kill)\\b.*dev\\.callmeclaude',
       'sudo\\s',
     ],
+    inputGuard: blockedInput,
   },
 
   async diagnostics() {

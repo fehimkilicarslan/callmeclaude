@@ -17,6 +17,8 @@ export interface ComputerEnv {
   sessionType: string;
 }
 
+import { clipboardPackage, selectClipboard, type ClipboardTool } from './clipboard.ts';
+
 export type ScreenshotTool = 'scrot' | 'import' | 'maim' | 'spectacle' | 'grim';
 export type InputTool = 'xdotool' | 'ydotool';
 
@@ -26,10 +28,12 @@ export interface ComputerDriver {
   id: string;
   screenshot: ScreenshotTool | null;
   input: InputTool | null;
+  /** How text is typed: through this clipboard tool (layout-independent), or key by key (plain ASCII only) when null. */
+  clipboard: ClipboardTool | null;
   /** Desktop control is offered only with a screenshot tool: the agent must be able to verify what it did. */
   desktop: boolean;
   /** Tools that would make this environment work (first = recommended), with what they are for. */
-  missing: { tool: string; purpose: 'screenshot' | 'input' }[];
+  missing: { tool: string; purpose: 'screenshot' | 'input' | 'clipboard' }[];
   /** Why something is not supported here (shown by doctor and told to the agent). */
   notes: string[];
 }
@@ -134,9 +138,12 @@ export function selectComputerDriver(envVars: Env, has: (bin: string) => boolean
     if (want('ydotool', 'input')) input = 'ydotool';
   }
 
+  const clipboard = selectClipboard(env.session, has);
+  if (!clipboard && env.session !== 'none') missing.push({ tool: clipboardPackage(env.session), purpose: 'clipboard' });
+
   const desktop = !!screenshot;
   if (!desktop && env.session !== 'none') notes.push('Desktop control needs a screenshot tool, so only the browser tools can be used.');
-  return { env, id, screenshot, input, desktop, missing, notes };
+  return { env, id, screenshot, input, clipboard, desktop, missing, notes };
 }
 
 /** Screenshot command for a file path (all non-interactive, whole screen). */
@@ -168,7 +175,8 @@ export function envSummary(env: ComputerEnv) {
  * The "Tools" block of the computer-task system prompt on Linux (the Rules block is shared with macOS).
  * `shotDir` is a private temporary directory the hub creates per task and removes afterwards.
  */
-export function linuxToolsBlock(d: ComputerDriver, o: { shotDir: string; browser: boolean }): string {
+export function linuxToolsBlock(d: ComputerDriver, o: { shotDir: string; browser: boolean; typeCmd?: string }): string {
+  const typeLines = typingLines(d, o.typeCmd ?? 'cmc type-text');
   const L: string[] = [];
   L.push(`This computer runs Linux: ${envSummary(d.env)}. Desktop driver: ${d.id}.`);
   L.push('Tools (prefer them in this order):');
@@ -198,7 +206,8 @@ export function linuxToolsBlock(d: ComputerDriver, o: { shotDir: string; browser
     );
     L.push('Mouse and keyboard (xdotool):');
     L.push('- Move and click: `xdotool mousemove X Y click 1` (button 3 = right, `click --repeat 2 1` = double click). Check the pointer with `xdotool getmouselocation`.');
-    L.push("- Type: `xdotool type --delay 40 -- 'text'`. Keys: `xdotool key Return`, `xdotool key ctrl+l`, `xdotool key alt+Tab`.");
+    L.push(...typeLines);
+    L.push('- Keys: `xdotool key Return`, `xdotool key ctrl+l`, `xdotool key alt+Tab`.');
     L.push("- Windows: `xdotool getactivewindow getwindowname`; bring one forward with `xdotool search --onlyvisible --name 'Firefox' windowactivate --sync`.");
   } else if (d.input === 'ydotool') {
     L.push(
@@ -206,8 +215,9 @@ export function linuxToolsBlock(d: ComputerDriver, o: { shotDir: string; browser
     );
     L.push('Mouse and keyboard (ydotool 1.x, needs the ydotoold daemon):');
     L.push('- Move: `ydotool mousemove --absolute -x X -y Y`. Left click: `ydotool click 0xC0`, right click: `ydotool click 0xC1`.');
+    L.push(...typeLines);
     L.push(
-      "- Type: `ydotool type -- 'text'`. Keys are Linux key codes, code:1 = press, code:0 = release: Enter `ydotool key 28:1 28:0`, ctrl+L `ydotool key 29:1 38:1 38:0 29:0` (Ctrl 29, Alt 56, Shift 42, Super 125, Tab 15, Esc 1).",
+      '- Keys are Linux key codes, code:1 = press, code:0 = release; release every key in the same command: Enter `ydotool key 28:1 28:0`, ctrl+L `ydotool key 29:1 38:1 38:0 29:0`, undo (ctrl+Z) `ydotool key 29:1 44:1 44:0 29:0` (Ctrl 29, Alt 56, Shift 42, Super 125, Tab 15, Esc 1).',
     );
     L.push('- If ydotool says it cannot connect to its socket, ydotoold is not running: say so and stop. Do not try to start it or change permissions.');
   } else {
@@ -216,10 +226,99 @@ export function linuxToolsBlock(d: ComputerDriver, o: { shotDir: string; browser
   return L.join('\n');
 }
 
+/** How the agent types text: always through the hub's helper (pastes via the clipboard, or ASCII key by key). */
+function typingLines(d: ComputerDriver, typeCmd: string): string[] {
+  const cmd = `\`${typeCmd} -- 'text'\``;
+  if (d.clipboard) {
+    return [
+      `- Type text ONLY with the hub's helper ${cmd} (in a terminal window: \`${typeCmd} --terminal -- 'text'\`). It pastes the text through the clipboard, so it works with any keyboard layout and any language, and then puts the developer's clipboard back. Never use \`${d.input} type\` or the clipboard tools (wl-copy, wl-paste, xclip, xsel) yourself.`,
+      "- The helper prints what happened. If it says the clipboard held something that could not be put back (e.g. an image), tell the developer in your final reply.",
+    ];
+  }
+  return [
+    `- No clipboard tool is installed, so text can only be typed key by key: ${cmd}. Only plain ASCII text works this way (the helper refuses anything else, and keys follow a US layout, so check the result in a screenshot). If the text has other characters (ç, ğ, ü, é, …), do not type it any other way: stop and say that a clipboard tool is missing.`,
+  ];
+}
+
 /** Extra rules on Linux; the shared Rules block stays as it is on macOS. */
 export const LINUX_EXTRA_RULES = [
   '- Every Bash command still goes through the CallMeClaude safety policy: protected paths and destructive commands are blocked. If something is blocked, do not work around it; report it.',
 ];
+
+/** Rules about typing, added on Linux when the agent has mouse and keyboard control. */
+export const LINUX_INPUT_RULES = [
+  '- Before typing, take a screenshot and check that the right field has the keyboard focus (cursor or highlight in it). If it does not, click into that field first and check again.',
+  '- Never select everything or cut: select-all (Ctrl+A) and cut (Ctrl+X) are blocked, and never replace a whole document or field to fix something. To undo a mistake use only undo (Ctrl+Z), then check with a screenshot.',
+];
+
+/** The Linux extra rules for a driver: the input rules only when there is an input tool. */
+export const linuxExtraRules = (d: ComputerDriver) => (d.desktop && d.input ? [...LINUX_EXTRA_RULES, ...LINUX_INPUT_RULES] : LINUX_EXTRA_RULES);
+
+// ---------- input guard (brain.ts) ----------
+
+export const DENY_SHORTCUT =
+  'Select-all (Ctrl+A) and cut (Ctrl+X) are blocked by CallMeClaude policy on this computer. To fix a mistake use only undo (Ctrl+Z), then check with a screenshot.';
+export const DENY_HELD_CTRL = 'Press and release Ctrl in the same command: holding it across commands is blocked by CallMeClaude policy.';
+export const DENY_CLIPBOARD =
+  "The clipboard tools are blocked by CallMeClaude policy: type text only with the hub's type-text helper, which keeps the developer's clipboard.";
+export const DENY_TYPE_NON_ASCII =
+  "Typing non-ASCII text key by key is blocked by CallMeClaude policy (it depends on the keyboard layout): use the hub's type-text helper.";
+
+const CTRL_NAME = /^(ctrl|control|control_l|control_r)$/i;
+/** Linux key codes: left/right Ctrl, A, X. */
+const CTRL_CODES = new Set(['29', '97']);
+const SELECT_CUT_CODES = new Set(['30', '45']);
+
+/**
+ * Why a Bash command must not run in a Linux computer task, or undefined (pure). Blocks select-all and cut sent
+ * through xdotool (`key ctrl+a`, `keydown ctrl key x`) or ydotool (`key 29:1 30:1 …`, and the 0.x `key ctrl+a`),
+ * a Ctrl that is left pressed at the end of a command, the clipboard tools, and non-ASCII `type`.
+ */
+export function blockedInput(command: string): string | undefined {
+  if (/(^|[\s;&|(`$'"])(wl-copy|wl-paste|xclip|xsel)\b/.test(command)) return DENY_CLIPBOARD;
+  for (const seg of command.split(/;|&&|\|\||\||\n/)) {
+    const tool = seg.match(/\b(xdotool|ydotool)\b/)?.[1];
+    if (!tool) continue;
+    const words = seg.slice(seg.indexOf(tool) + tool.length).trim().split(/\s+/).map((w) => w.replace(/^['"]|['"]$/g, ''));
+    if (words.includes('type') && !isAsciiText(seg)) return DENY_TYPE_NON_ASCII;
+    // Combos by name: ctrl+a, ctrl+shift+x, Control_L+a (xdotool, ydotool 0.x).
+    for (const w of words) {
+      const parts = w.split('+');
+      if (parts.length > 1 && parts.slice(0, -1).some((p) => CTRL_NAME.test(p)) && /^[ax]$/i.test(parts.at(-1)!)) return DENY_SHORTCUT;
+    }
+    if (tool === 'xdotool') {
+      let held = false;
+      for (let i = 0; i < words.length; i++) {
+        const verb = words[i];
+        if (verb !== 'key' && verb !== 'keydown' && verb !== 'keyup') continue;
+        // Arguments up to the next xdotool command; options start with --.
+        for (let j = i + 1; j < words.length && !/^(key|keydown|keyup|type|mousemove|click|search|windowactivate|sleep)$/.test(words[j]); j++) {
+          const k = words[j];
+          if (k.startsWith('-')) continue;
+          const isCtrl = k.split('+').some((p) => CTRL_NAME.test(p));
+          if (verb === 'keydown' && isCtrl) held = true;
+          else if (verb === 'keyup' && isCtrl) held = false;
+          else if (held && verb !== 'keyup' && /^[ax]$/i.test(k)) return DENY_SHORTCUT;
+        }
+      }
+      if (held) return DENY_HELD_CTRL;
+    } else {
+      const down = new Set<string>();
+      for (const w of words) {
+        const m = w.match(/^(\d+):([01])$/);
+        if (!m) continue;
+        if (m[2] === '1') {
+          if (SELECT_CUT_CODES.has(m[1]) && [...down].some((c) => CTRL_CODES.has(c))) return DENY_SHORTCUT;
+          down.add(m[1]);
+        } else down.delete(m[1]);
+      }
+      if ([...down].some((c) => CTRL_CODES.has(c))) return DENY_HELD_CTRL;
+    }
+  }
+  return undefined;
+}
+
+const isAsciiText = (s: string) => /^[\x00-\x7f]*$/.test(s);
 
 // ---------- ydotool version ----------
 

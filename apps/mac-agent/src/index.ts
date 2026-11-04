@@ -283,6 +283,11 @@ async function main() {
       await uninstallService();
       return console.log(`Hooks and service removed. Your data is still in ${CONFIG_PATH} (delete it manually if you like).`);
 
+    case 'type-text':
+      // Internal, Linux only: the computer task's agent types text with it (see platform/clipboard.ts).
+      // On macOS it is an unknown command like any other and falls through to the help text.
+      if (platform.id === 'linux') return typeTextCommand(process.argv.slice(3));
+    // falls through
     default:
       console.log(`CallMeClaude — cmc <command>
 
@@ -304,6 +309,32 @@ async function main() {
   logs [-f]            Hub logs
   restart | uninstall`);
   }
+}
+
+/** `cmc type-text [--terminal] -- text` (or the text on stdin): paste into the focused field, keep the clipboard. */
+async function typeTextCommand(args: string[]) {
+  const { linuxComputerDriver } = await import('./platform/linux.ts');
+  const { spawnRunner, typeText } = await import('./platform/clipboard.ts');
+  const { audit, sleep } = await import('./util.ts');
+  const { ensureDirs } = await import('./config.ts');
+  ensureDirs();
+  const sep = args.indexOf('--');
+  const opts = sep === -1 ? args : args.slice(0, sep);
+  let text = sep === -1 ? '' : args.slice(sep + 1).join(' ');
+  if (sep === -1) {
+    if (process.stdin.isTTY) {
+      console.log("usage: cmc type-text [--terminal] -- 'text'   (or the text on stdin)");
+      process.exitCode = 2;
+      return;
+    }
+    for await (const c of process.stdin) text += c;
+  }
+  const d = linuxComputerDriver(process.env);
+  const r = await typeText(text, { clipboard: d.clipboard, input: d.input, terminal: opts.includes('--terminal'), run: spawnRunner, sleep });
+  // Never the text itself: it may be anything the developer dictated.
+  audit('computer.type', { chars: [...text].length, via: r.via, clipboard: r.clipboard, ok: r.ok });
+  console.log(r.message);
+  if (!r.ok) process.exitCode = 1;
 }
 
 async function doctor() {

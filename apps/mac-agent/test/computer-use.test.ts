@@ -5,7 +5,7 @@ import {
   detectComputerEnv,
   installCommand,
   linuxToolsBlock,
-  LINUX_EXTRA_RULES,
+  linuxExtraRules,
   packageManager,
   selectComputerDriver,
   uinputSteps,
@@ -16,7 +16,7 @@ import { computerSystemPrompt } from '../src/brain.ts';
 
 const fixture = (name: string) => readFileSync(new URL(`./fixtures/${name}`, import.meta.url), 'utf8');
 const tools = (...bins: string[]) => (b: string) => bins.includes(b);
-const ALL = tools('scrot', 'import', 'maim', 'xdotool', 'spectacle', 'grim', 'ydotool');
+const ALL = tools('scrot', 'import', 'maim', 'xdotool', 'spectacle', 'grim', 'ydotool', 'xclip', 'wl-copy', 'wl-paste');
 
 // ---------- detection matrix ----------
 
@@ -77,15 +77,25 @@ test('Wayland + GNOME: no screenshot path, so no desktop control (even with ever
 
 test('missing tools are reported with their purpose', () => {
   let d = selectComputerDriver(X11, tools());
-  assert.deepEqual(d.missing, [{ tool: 'scrot', purpose: 'screenshot' }, { tool: 'xdotool', purpose: 'input' }]);
+  assert.deepEqual(d.missing, [
+    { tool: 'scrot', purpose: 'screenshot' },
+    { tool: 'xdotool', purpose: 'input' },
+    { tool: 'xclip', purpose: 'clipboard' },
+  ]);
   assert.equal(d.desktop, false);
   d = selectComputerDriver(X11, tools('scrot'));
   assert.equal(d.desktop, true); // look-only
   assert.equal(d.input, null);
-  d = selectComputerDriver(KDE, tools('spectacle'));
+  d = selectComputerDriver(KDE, tools('spectacle', 'wl-copy', 'wl-paste'));
   assert.deepEqual(d.missing, [{ tool: 'ydotool', purpose: 'input' }]);
-  d = selectComputerDriver(SWAY, tools('ydotool'));
+  d = selectComputerDriver(SWAY, tools('ydotool', 'wl-copy', 'wl-paste'));
   assert.deepEqual(d.missing, [{ tool: 'grim', purpose: 'screenshot' }]);
+  // Wayland needs both wl-copy and wl-paste; X11 takes xclip, else xsel.
+  assert.deepEqual(selectComputerDriver(KDE, tools('spectacle', 'ydotool', 'wl-copy')).missing, [{ tool: 'wl-clipboard', purpose: 'clipboard' }]);
+  assert.equal(selectComputerDriver(KDE, ALL).clipboard, 'wl-clipboard');
+  assert.equal(selectComputerDriver(X11, ALL).clipboard, 'xclip');
+  assert.equal(selectComputerDriver(X11, tools('scrot', 'xdotool', 'xsel')).clipboard, 'xsel');
+  assert.equal(selectComputerDriver({}, ALL).clipboard, null);
   assert.equal(d.desktop, false);
 });
 
@@ -141,7 +151,10 @@ test('macOS computer-task system prompt is byte-for-byte unchanged', async () =>
 
 const linuxPrompt = (env: Record<string, string>, has: (b: string) => boolean, browser = true) => {
   const d = selectComputerDriver(env, has);
-  return computerSystemPrompt({ subject: 'computer', toolsBlock: linuxToolsBlock(d, { shotDir: '/tmp/cmc-screen-X', browser }), extraRules: LINUX_EXTRA_RULES }, 'en-US');
+  return computerSystemPrompt(
+    { subject: 'computer', toolsBlock: linuxToolsBlock(d, { shotDir: '/tmp/cmc-screen-X', browser, typeCmd: '/usr/bin/node /x/cmc.mjs type-text' }), extraRules: linuxExtraRules(d) },
+    'en-US',
+  );
 };
 
 const SHARED_RULES = [
@@ -159,10 +172,15 @@ test('Linux X11 prompt: scrot screenshot to a temp file, Read, delete; xdotool i
   assert.ok(p.includes('Read tool'));
   assert.ok(p.includes('`rm -f /tmp/cmc-screen-X/1.png`'));
   assert.ok(p.includes('xdotool mousemove X Y click 1'));
-  assert.ok(p.includes("xdotool type --delay 40 -- 'text'"));
+  assert.ok(p.includes("Type text ONLY with the hub's helper `/usr/bin/node /x/cmc.mjs type-text -- 'text'`"));
+  assert.ok(!p.includes("xdotool type --delay 40 -- 'text'"));
   assert.match(p, /screenshot pixels ARE X11 screen coordinates/);
   assert.ok(p.includes('mcp__claude-in-chrome__'));
   assert.ok(!p.includes('ydotool') && !p.includes('Peekaboo MCP'));
+  // Without a clipboard tool, the helper types ASCII key by key and the agent is told so.
+  const k = linuxPrompt(X11, tools('scrot', 'xdotool'));
+  assert.match(k, /No clipboard tool is installed, so text can only be typed key by key/);
+  assert.match(k, /do not type it any other way/);
   for (const r of SHARED_RULES) assert.ok(p.includes(r), r);
   assert.ok(linuxPrompt(X11, tools('import', 'xdotool')).includes('`import -window root /tmp/cmc-screen-X/1.png`'));
   assert.ok(linuxPrompt(X11, tools('maim', 'xdotool')).includes('`maim /tmp/cmc-screen-X/1.png`'));
@@ -181,7 +199,7 @@ test('Linux KDE Wayland prompt: spectacle in the background + ydotool, with the 
 test('Linux wlroots prompt: grim', () => {
   const p = linuxPrompt(SWAY, ALL);
   assert.ok(p.includes('`grim -c /tmp/cmc-screen-X/1.png`'));
-  assert.ok(p.includes('ydotool type'));
+  assert.ok(p.includes('Never use `ydotool type` or the clipboard tools'));
 });
 
 test('Linux GNOME Wayland prompt: desktop unsupported, browser only', () => {

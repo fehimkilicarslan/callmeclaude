@@ -87,6 +87,8 @@ export interface Platform {
     protectedPaths: RegExp[];
     /** Alternatives joined into one case-insensitive DESTRUCTIVE regex. */
     destructive: string[];
+    /** Linux only: why a Bash command that drives the keyboard or clipboard is blocked, or undefined (see blockedInput). */
+    inputGuard?: (command: string) => string | undefined;
   };
   /** How a computer task operates this machine. `useChrome` = the hub passes --chrome to the agent. */
   computerUse(o: { useChrome: boolean }): Promise<ComputerUsePlan>;

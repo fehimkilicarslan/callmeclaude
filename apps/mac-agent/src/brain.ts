@@ -6,9 +6,11 @@ import { platform, securityPatterns } from './platform/index.ts';
 import type { ComputerUsePlan } from './platform/types.ts';
 import { audit, clip, languageName, log, redact } from './util.ts';
 
-const { PROTECTED, DESTRUCTIVE } = securityPatterns();
+const SECURITY = securityPatterns();
 
-function guard(kind: string, extraDeny?: (tool: string, input: any) => string | undefined): CanUseTool {
+/** The tool guard of the hub's own agents. `patterns` defaults to this platform's (tests pass another). */
+export function guard(kind: string, extraDeny?: (tool: string, input: any) => string | undefined, patterns = SECURITY): CanUseTool {
+  const { PROTECTED, DESTRUCTIVE, INPUT_GUARD } = patterns;
   return async (tool, input) => {
     const blob = JSON.stringify(input ?? {});
     if (PROTECTED.some((r) => r.test(blob))) {
@@ -18,6 +20,11 @@ function guard(kind: string, extraDeny?: (tool: string, input: any) => string | 
     if (tool === 'Bash' && DESTRUCTIVE.test(String((input as any)?.command ?? ''))) {
       audit(`${kind}.deny`, { tool, command: (input as any)?.command });
       return { behavior: 'deny', message: 'Destructive commands are blocked by CallMeClaude policy.' };
+    }
+    const why = tool === 'Bash' ? INPUT_GUARD?.(String((input as any)?.command ?? '')) : undefined;
+    if (why) {
+      audit(`${kind}.deny`, { tool, command: (input as any)?.command, reason: 'input policy' });
+      return { behavior: 'deny', message: why };
     }
     const extra = extraDeny?.(tool, input);
     if (extra) return { behavior: 'deny', message: extra };
