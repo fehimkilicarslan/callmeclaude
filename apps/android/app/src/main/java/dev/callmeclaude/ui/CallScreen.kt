@@ -1,6 +1,7 @@
 package dev.callmeclaude.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -18,12 +19,16 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -31,6 +36,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -38,6 +44,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.callmeclaude.R
+import dev.callmeclaude.calls.AudioRoute
+import dev.callmeclaude.calls.AudioRoutesUi
 import dev.callmeclaude.calls.CallManager
 import kotlinx.coroutines.delay
 
@@ -48,6 +56,7 @@ fun CallScreen(calls: CallManager) {
     val muted by calls.muted.collectAsStateWithLifecycle()
     val speaker by calls.speaker.collectAsStateWithLifecycle()
     val lines by calls.transcript.collectAsStateWithLifecycle()
+    val routes by calls.routes.collectAsStateWithLifecycle()
     val c = call ?: return
 
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
@@ -68,7 +77,7 @@ fun CallScreen(calls: CallManager) {
         else -> "Calling…"
     }
 
-    CompositionLocalProvider(LocalContentColor provides Color.White) { CallContent(calls, c, status, ringing, muted, speaker, lines) }
+    CompositionLocalProvider(LocalContentColor provides Color.White) { CallContent(calls, c, status, ringing, muted, speaker, routes, lines) }
 }
 
 @Composable
@@ -79,8 +88,10 @@ private fun CallContent(
     ringing: Boolean,
     muted: Boolean,
     speaker: Boolean,
+    routes: AudioRoutesUi,
     lines: List<CallManager.Line>,
 ) {
+    var picker by remember { mutableStateOf(false) }
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         modifier = Modifier
@@ -129,15 +140,74 @@ private fun CallContent(
                 RoundAction(R.drawable.ic_call, "Answer", Palette.green) { calls.answer() }
             }
         } else {
-            Row(horizontalArrangement = Arrangement.spacedBy(56.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(32.dp)) {
                 CallKey(if (muted) R.drawable.ic_mic_off else R.drawable.ic_mic, "Mute", muted) { calls.setMuted(!muted) }
                 CallKey(R.drawable.ic_speaker, "Speaker", speaker) { calls.setSpeaker(!speaker) }
+                // Same as iOS's route picker: only worth a button when there is more than phone + speaker.
+                if (routes.available.size > 2 || routes.available.any { it.kind == AudioRoute.Kind.BLUETOOTH }) {
+                    CallKey(R.drawable.ic_audio_route, "Audio", false) { picker = true }
+                }
             }
             Box(Modifier.padding(top = 44.dp, bottom = 70.dp)) {
                 RoundAction(R.drawable.ic_call_end, "End call", Palette.red, label = null) { calls.hangUp() }
             }
         }
     }
+    if (picker && !ringing) {
+        RoutePicker(
+            routes,
+            onPick = { id ->
+                calls.selectRoute(id)
+                picker = false
+            },
+            onDismiss = { picker = false },
+        )
+    }
+}
+
+/** Every output Telecom offers right now; tapping one switches to it. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun RoutePicker(routes: AudioRoutesUi, onPick: (String) -> Unit, onDismiss: () -> Unit) {
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Text(
+            "Audio output",
+            style = MaterialTheme.typography.titleMedium,
+            modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp),
+        )
+        routes.available.forEach { r ->
+            val selected = r.id == routes.current?.id
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .selectable(selected = selected, role = Role.RadioButton) { onPick(r.id) }
+                    .padding(horizontal = 12.dp, vertical = 4.dp),
+            ) {
+                RadioButton(selected = selected, onClick = null, modifier = Modifier.padding(12.dp))
+                Column {
+                    Text(routeTitle(r), style = MaterialTheme.typography.bodyLarge)
+                    routeSubtitle(r)?.let {
+                        Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+            }
+        }
+        Spacer(Modifier.height(24.dp))
+    }
+}
+
+private fun routeTitle(r: AudioRoute) = when (r.kind) {
+    AudioRoute.Kind.EARPIECE -> "Phone"
+    AudioRoute.Kind.SPEAKER -> "Speaker"
+    AudioRoute.Kind.WIRED -> "Wired headset"
+    else -> r.name.ifBlank { "Bluetooth" }
+}
+
+private fun routeSubtitle(r: AudioRoute) = when (r.kind) {
+    AudioRoute.Kind.BLUETOOTH -> "Bluetooth"
+    AudioRoute.Kind.STREAMING -> "Streaming"
+    else -> null
 }
 
 @Composable
