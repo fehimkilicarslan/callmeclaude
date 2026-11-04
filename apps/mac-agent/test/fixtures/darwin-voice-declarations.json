@@ -191,13 +191,17 @@
   },
   {
     "name": "stop",
-    "description": "Stop one session immediately, or all of them (\"all\" = panic).",
+    "description": "Interrupt a session that is doing something wrong. target=\"all\" is the emergency PANIC: it stops every session and pauses the hub. Never use it to end a call or a conversation.",
     "parametersJsonSchema": {
       "type": "object",
       "properties": {
         "target": {
           "type": "string",
-          "description": "Project name or \"all\""
+          "description": "Project name, or \"all\" only for an explicit \"stop everything\" emergency"
+        },
+        "confirmed": {
+          "type": "boolean",
+          "description": "For \"all\": the developer explicitly asked to stop EVERYTHING"
         }
       },
       "required": [

@@ -38,6 +38,8 @@ export class VoiceCall {
   private userText = '';
   private botText = '';
   private ending = false;
+  /** When the phone will finish playing the audio sent so far (24 kHz PCM16 mono = 48 000 bytes/s). */
+  private playUntil = 0;
   /** Last time a microphone frame arrived; the phone streams continuously during a call. */
   private lastAudioAt = 0;
   private stats = { micBytes: 0, outBytes: 0, startedAt: Date.now(), firstMicMs: -1, firstOutMs: -1, reattached: 0 };
@@ -161,6 +163,7 @@ export class VoiceCall {
           this.stats.outBytes += b.length;
           if (this.stats.firstOutMs < 0) this.stats.firstOutMs = Date.now() - this.stats.startedAt;
           this.sink.audio(b);
+          this.playUntil = Math.max(this.playUntil, Date.now()) + (b.length / 48_000) * 1000;
         }
       }
       if (sc.inputTranscription?.text) {
@@ -175,13 +178,15 @@ export class VoiceCall {
       }
       if (sc.interrupted) {
         this.speaking = false;
+        this.playUntil = 0;
         this.sink.json({ type: 'audio.flush' });
       }
       if (sc.turnComplete) {
         this.speaking = false;
         this.lastActivity = Date.now();
         this.flushTurnText();
-        if (this.ending) return void setTimeout(() => this.end('assistant-ended'), 1200);
+        // Hang up only after the goodbye has finished playing on the phone.
+        if (this.ending) return void setTimeout(() => this.end('assistant-ended'), Math.max(0, this.playUntil - Date.now()) + 700);
         const next = this.idleQueue.shift();
         if (next) this.inject(next, 'now');
       }

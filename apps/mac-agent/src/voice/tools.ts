@@ -71,7 +71,15 @@ export const declarationsFor = (p: Pick<Platform, 'words'>): FunctionDeclaration
     parametersJsonSchema: obj({ question: str('The question') }, ['question']),
     behavior: Behavior.NON_BLOCKING,
   },
-  { name: 'stop', description: 'Stop one session immediately, or all of them ("all" = panic).', parametersJsonSchema: obj({ target: str('Project name or "all"') }, ['target']) },
+  {
+    name: 'stop',
+    description:
+      'Interrupt a session that is doing something wrong. target="all" is the emergency PANIC: it stops every session and pauses the hub. Never use it to end a call or a conversation.',
+    parametersJsonSchema: obj(
+      { target: str('Project name, or "all" only for an explicit "stop everything" emergency'), confirmed: bool('For "all": the developer explicitly asked to stop EVERYTHING') },
+      ['target'],
+    ),
+  },
   { name: 'resume_hub', description: 'Re-enable automatic actions after a panic/pause.', parametersJsonSchema: obj({ confirmed: CONFIRMED }) },
   {
     name: 'set_mode',
@@ -104,6 +112,10 @@ export function startSessionReply(mode: 'tmux' | 'headless', dir: string, starte
 
 const HIGH_RISK =
   /(deploy|publish|push|pay|payment|purchase|buy|delete|drop|remove|send .*(mail|email|message)|production|prod\b|yayınla|ödeme|öde|satın|sil|gönder.*(mail|e-posta|mesaj))/i;
+/** After handing off work with a call-back, the call has done its job: wrap up instead of lingering. */
+const WRAP_UP = {
+  next: 'If nothing else is open, say in one short sentence that you will call back when it is done, say goodbye and call end_call in the same turn.',
+};
 const needConfirm = (what: string) => ({ needs_confirmation: true, say: `Ask the developer for explicit confirmation first: ${what}` });
 
 export async function runTool(hub: Hub, name: string, args: any, ctx: { endCall: () => void }): Promise<Record<string, unknown>> {
@@ -134,7 +146,7 @@ export async function runTool(hub: Hub, name: string, args: any, ctx: { endCall:
         queue: 'The session is busy; the instruction will be delivered at the next opportunity.',
         none: 'Could not deliver the instruction.',
       }[via];
-      return { ok: via !== 'none', delivered_via: via, call_back: callBack, say: callBack ? `${msg} I'll call when it's done.` : msg };
+      return { ok: via !== 'none', delivered_via: via, call_back: callBack, say: callBack ? `${msg} I'll call when it's done.` : msg, ...(callBack ? WRAP_UP : {}) };
     }
     case 'answer_permission': {
       const s = find(args.project);
@@ -169,13 +181,13 @@ export async function runTool(hub: Hub, name: string, args: any, ctx: { endCall:
       );
       // A headless session's id is known up front; a tmux session is bound by folder on its first hook.
       if (callBack && mode === 'headless') hub.st.addCallback({ sessionId: started });
-      return { ...startSessionReply(mode, dir, started, callBack), call_back: callBack };
+      return { ...startSessionReply(mode, dir, started, callBack), call_back: callBack, ...(callBack ? WRAP_UP : {}) };
     }
     case 'call_me_when_done': {
       const s = find(args.project);
       if (!s) return { error: 'Session not found.', sessions: projects() };
       hub.st.addCallback({ sessionId: s.id });
-      return { ok: true, say: `I'll call when ${s.project} is done or stuck.` };
+      return { ok: true, say: `I'll call when ${s.project} is done or stuck.`, ...WRAP_UP };
     }
     case 'computer_task': {
       if (!args.confirmed) return needConfirm(args.task);
@@ -186,7 +198,8 @@ export async function runTool(hub: Hub, name: string, args: any, ctx: { endCall:
       return { answer: await askBrain(hub, args.question) };
     case 'stop': {
       if (String(args.target).toLowerCase() === 'all') {
-        await hub.controller.panic();
+        if (!args.confirmed) return needConfirm('stop ALL sessions and pause the hub (emergency stop)');
+        await hub.controller.panic('voice');
         return { ok: true, say: 'All sessions stopped; automatic actions are paused.' };
       }
       const s = find(args.target);

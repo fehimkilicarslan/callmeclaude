@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { selectPlatform, securityPatterns } from '../src/platform/index.ts';
 import { darwin, darwinPlist } from '../src/platform/darwin.ts';
+import { DOTENV } from '../src/platform/common.ts';
 import { linux, linuxServicePath, linuxShell, linuxUnit, parseConf } from '../src/platform/linux.ts';
 
 test('platform selection follows process.platform', () => {
@@ -62,7 +63,8 @@ test('macOS security patterns are unchanged', () => {
   const original = /(rm\s+-rf?\s+[~\/]|mkfs|diskutil\s+erase|dd\s+if=|:\(\)\s*\{|shutdown|halt\b|security\s+(delete|dump|find-generic-password\s+.*-w)|launchctl\s+unload|csrutil|sudo\s)/i;
   assert.equal(DESTRUCTIVE.source, original.source);
   assert.equal(DESTRUCTIVE.flags, original.flags);
-  const originalProtected = [/\.ssh\//, /Library\/Keychains/, /\.aws\/credentials/, /\.gnupg\//, /\/\.env(\.|$)/, /\.claude\/\.credentials/];
+  // DOTENV replaced the original /\/\.env(\.|$)/, which never matched the JSON-serialized tool input.
+  const originalProtected = [/\.ssh\//, /Library\/Keychains/, /\.aws\/credentials/, /\.gnupg\//, DOTENV, /\.claude\/\.credentials/];
   assert.deepEqual(PROTECTED.map(String).sort(), originalProtected.map(String).sort());
 });
 

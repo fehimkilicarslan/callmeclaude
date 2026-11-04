@@ -125,10 +125,10 @@ export class Controller {
     this.mark(s, killed ? 'ended' : 'waiting_input', 'Stopped.');
   }
 
-  async panic() {
+  async panic(source: 'voice' | 'app' | 'cli' = 'cli') {
     this.st.paused = true;
     for (const s of this.st.activeSessions()) await this.interrupt(s);
-    audit('panic', {});
+    audit('panic', { source });
     this.st.changed();
   }
 

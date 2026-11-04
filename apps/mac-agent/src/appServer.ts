@@ -181,7 +181,7 @@ export class AppServer {
         }
         return;
       case 'panic':
-        return this.hub.controller.panic();
+        return this.hub.controller.panic('app');
       case 'resume':
         this.hub.st.paused = false;
         this.hub.st.changed();
