@@ -46,6 +46,8 @@ export interface AgentRun {
   extraArgs?: Options['extraArgs'];
   cwd?: string;
   canUseTool?: Options['canUseTool'];
+  /** Extra environment for the agent process (merged over the hub's own; the hub's process.env is not changed). */
+  env?: Record<string, string>;
   onText?: (t: string) => void;
 }
 
@@ -59,6 +61,7 @@ export async function runAgent(r: AgentRun): Promise<string> {
       prompt: r.task,
       options: {
         ...base(),
+        ...(r.env ? { env: { ...base().env, ...r.env } } : {}),
         cwd: r.cwd ?? BRAIN_DIR,
         model: r.model,
         systemPrompt: { type: 'preset', preset: 'claude_code', append: r.system },

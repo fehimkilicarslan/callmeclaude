@@ -41,6 +41,11 @@ export interface ComputerUsePlan {
   /** Rules appended after the shared ones (none on macOS). */
   extraRules: string[];
   mcpServers: Record<string, any>;
+  /**
+   * Variables the agent process gets on top of the hub's environment (Linux: the desktop session read from
+   * systemd --user when the hub started before the desktop login). Absent on macOS.
+   */
+  env?: Record<string, string>;
   /** false when nothing at all can operate this machine: the task is refused with `unsupported`. */
   usable: boolean;
   unsupported?: string;

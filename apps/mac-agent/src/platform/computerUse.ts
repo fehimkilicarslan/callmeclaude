@@ -62,6 +62,32 @@ export function detectComputerEnv(env: Env): ComputerEnv {
   return { session, desktop, desktopName, sessionType: type, display: session === 'wayland' ? env.WAYLAND_DISPLAY : session === 'x11' ? env.DISPLAY : undefined };
 }
 
+// ---------- desktop session environment ----------
+
+/** What the computer task needs to reach the desktop; a hub started before the desktop login (linger) lacks them. */
+export const SESSION_VARS = ['DISPLAY', 'WAYLAND_DISPLAY', 'XDG_SESSION_TYPE', 'XDG_CURRENT_DESKTOP', 'DBUS_SESSION_BUS_ADDRESS'] as const;
+const GRAPHICAL_VARS = SESSION_VARS.filter((v) => v !== 'DBUS_SESSION_BUS_ADDRESS');
+
+/**
+ * The environment a computer task runs with (pure). When the hub's own environment shows no display, the
+ * graphical variables come from the systemd user manager (`systemctl --user show-environment`, which the
+ * desktop fills at login) as one set, so a stale XDG_SESSION_TYPE=tty cannot mix with a Wayland display.
+ * DBUS_SESSION_BUS_ADDRESS is filled on its own when missing. Variables the hub already has are kept.
+ * Returns the merged environment and the values taken from systemd (given to the agent process; the hub's
+ * own environment is never changed).
+ */
+export function desktopSessionEnv(proc: Env, systemd: Env): { env: Env; fromSystemd: Record<string, string> } {
+  const fromSystemd: Record<string, string> = {};
+  if (!proc.DISPLAY && !proc.WAYLAND_DISPLAY && (systemd.DISPLAY || systemd.WAYLAND_DISPLAY)) {
+    for (const v of GRAPHICAL_VARS) if (systemd[v]) fromSystemd[v] = systemd[v]!;
+  }
+  if (!proc.DBUS_SESSION_BUS_ADDRESS && systemd.DBUS_SESSION_BUS_ADDRESS) fromSystemd.DBUS_SESSION_BUS_ADDRESS = systemd.DBUS_SESSION_BUS_ADDRESS;
+  return { env: { ...proc, ...fromSystemd }, fromSystemd };
+}
+
+/** True when this environment lacks something the computer task may need (then systemd is asked). */
+export const needsSessionEnv = (proc: Env) => (!proc.DISPLAY && !proc.WAYLAND_DISPLAY) || !proc.DBUS_SESSION_BUS_ADDRESS;
+
 const X11_SHOTS: ScreenshotTool[] = ['scrot', 'import', 'maim'];
 
 /** Pick the computer-use driver for an environment. Pure: `has(bin)` answers "is it on PATH?". */

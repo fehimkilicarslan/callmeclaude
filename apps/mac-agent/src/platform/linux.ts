@@ -7,7 +7,10 @@ import { execFileP } from '../util.ts';
 import { binPath, SERVICE_LABEL } from './common.ts';
 import { SecretStoreError, type Platform } from './types.ts';
 import {
+  desktopSessionEnv,
   envSummary,
+  needsSessionEnv,
+  SESSION_VARS,
   installCommand,
   LINUX_EXTRA_RULES,
   linuxToolsBlock,
@@ -168,14 +171,43 @@ function driverReport(d: ComputerDriver) {
   return parts[0];
 }
 
-/** Parse `systemctl --user show-environment` output (NAME=value lines). */
+/** Undo systemd's $'…' quoting of values with special characters (show-environment, systemd ≥ 240). */
+function unquoteSystemd(v: string) {
+  const m = v.match(/^\$'(.*)'$/s);
+  if (!m) return v;
+  return m[1].replace(/\\(x[0-9a-fA-F]{2}|[0-7]{3}|.)/g, (_, e: string) => {
+    if (e.length === 3 && e[0] === 'x') return String.fromCharCode(parseInt(e.slice(1), 16));
+    if (/^[0-7]{3}$/.test(e)) return String.fromCharCode(parseInt(e, 8));
+    return ({ n: '\n', t: '\t', r: '\r', a: '\x07', b: '\b', f: '\f', v: '\v', e: '\x1b' } as Record<string, string>)[e] ?? e;
+  });
+}
+
+/** Parse `systemctl --user show-environment` output (NAME=value lines, $'…' values unquoted). */
 export function parseEnvBlock(text: string) {
   const out: Record<string, string> = {};
   for (const line of text.split('\n')) {
     const m = line.match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/);
-    if (m) out[m[1]] = m[2];
+    if (m) out[m[1]] = unquoteSystemd(m[2]);
   }
   return out;
+}
+
+/** The systemd user manager's environment (read only); {} when systemctl is unavailable. */
+async function systemdUserEnv() {
+  try {
+    return parseEnvBlock((await execFileP('systemctl', ['--user', 'show-environment'], { timeout: 5000 })).stdout);
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * This process's environment completed with the desktop session from systemd when it lacks one
+ * (the hub started at boot by linger, before anyone logged in to the desktop). Nothing is written to process.env.
+ */
+export async function linuxSessionEnv(proc: NodeJS.ProcessEnv = process.env) {
+  if (!needsSessionEnv(proc)) return { env: proc, fromSystemd: {} as Record<string, string> };
+  return desktopSessionEnv(proc, await systemdUserEnv());
 }
 
 const SLEEP_TARGETS = ['sleep.target', 'suspend.target', 'hibernate.target', 'hybrid-sleep.target'];
@@ -289,7 +321,8 @@ export const linux: Platform = {
   ],
 
   async computerUse({ useChrome }) {
-    const d = linuxComputerDriver();
+    const session = await linuxSessionEnv();
+    const d = linuxComputerDriver(session.env);
     const browser = useChrome && chromeHosts().length > 0;
     if (!d.desktop && !browser) {
       return {
@@ -311,6 +344,7 @@ export const linux: Platform = {
       toolsBlock: linuxToolsBlock(d, { shotDir, browser }),
       extraRules: LINUX_EXTRA_RULES,
       mcpServers: {},
+      ...(Object.keys(session.fromSystemd).length ? { env: session.fromSystemd } : {}),
       usable: true,
       cleanup() {
         if (shotDir) rmSync(shotDir, { recursive: true, force: true });
@@ -352,20 +386,41 @@ export const linux: Platform = {
   },
 
   async diagnostics() {
+    const { env, fromSystemd } = await linuxSessionEnv();
     return {
       node: process.execPath,
       platform: `linux ${process.arch}`,
       shell: linuxShell(),
-      display: process.env.WAYLAND_DISPLAY ? `wayland (${process.env.WAYLAND_DISPLAY})` : process.env.DISPLAY ? `x11 (${process.env.DISPLAY})` : 'none',
+      display:
+        (env.WAYLAND_DISPLAY ? `wayland (${env.WAYLAND_DISPLAY})` : env.DISPLAY ? `x11 (${env.DISPLAY})` : 'none') +
+        (Object.keys(fromSystemd).length ? ' (from systemd --user)' : ''),
       secretTool: onPath('secret-tool') ? 'found' : 'missing',
       computerUse: (() => {
-        const d = linuxComputerDriver();
+        const d = linuxComputerDriver(env);
         return `${d.id} (${envSummary(d.env)}): screenshot ${d.screenshot ?? 'none'}, input ${d.input ?? 'none'}`;
       })(),
       chrome: chromeHosts().join(', ') || 'native host not installed',
     };
   },
 };
+
+const IMPORT_ENV = `systemctl --user import-environment ${SESSION_VARS.join(' ')}`;
+
+/**
+ * Doctor: what a hub service started without a desktop (linger) will find when a computer task starts.
+ * It reads the session from the systemd user manager then, so only the manager's environment matters (pure).
+ */
+export function serviceSessionReport(systemdEnv: Record<string, string>, shell: ComputerDriver, ydotool?: YdotoolVersion): string {
+  const { env, fromSystemd } = desktopSessionEnv({}, systemdEnv);
+  if (!fromSystemd.DISPLAY && !fromSystemd.WAYLAND_DISPLAY) {
+    return `!systemd --user has no DISPLAY or WAYLAND_DISPLAY yet, so a computer task cannot reach the desktop. The hub reads them from systemd --user when a computer task starts; most desktops put them there at login. If they are still missing while you are logged in → ${IMPORT_ENV} (no restart needed)`;
+  }
+  const svc = linuxComputerDriver({ ...env, PATH: process.env.PATH }, ydotool);
+  if (svc.id !== shell.id) {
+    return `!systemd --user gives "${svc.id}", this shell "${shell.id}"; the hub uses the systemd values → ${IMPORT_ENV} (no restart needed)`;
+  }
+  return `${svc.id} (read from systemd --user when a computer task starts)`;
+}
 
 /** Doctor checks for computer use: detect, report and advise only. Nothing here changes the system. */
 function computerUseChecks() {
@@ -410,14 +465,7 @@ function computerUseChecks() {
   }
   checks.push({
     name: 'Computer use: hub service sees the desktop',
-    fn: async () => {
-      const { stdout } = await execFileP('systemctl', ['--user', 'show-environment']);
-      const env = parseEnvBlock(stdout);
-      const vars = ['WAYLAND_DISPLAY', 'DISPLAY', 'XDG_SESSION_TYPE', 'XDG_CURRENT_DESKTOP'];
-      const svc = selectComputerDriver(Object.fromEntries(vars.map((v) => [v, env[v]])), (b) => onPath(b));
-      if (svc.id === d.id) return `${svc.id}`;
-      return `!service environment gives "${svc.id}" (this shell: "${d.id}") → systemctl --user import-environment ${vars.join(' ')}, then cmc restart`;
-    },
+    fn: async () => serviceSessionReport(parseEnvBlock((await execFileP('systemctl', ['--user', 'show-environment'])).stdout), d, ydotool),
   });
   checks.push({
     name: 'Computer use: browser (Claude in Chrome)',
