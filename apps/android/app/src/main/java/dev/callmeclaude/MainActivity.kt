@@ -26,7 +26,7 @@ class MainActivity : ComponentActivity() {
             navigationBarStyle = SystemBarStyle.dark(Color.TRANSPARENT),
         )
         if (savedInstanceState == null) acceptDebugPairing(intent)
-        setContent { App(hub) }
+        setContent { App(hub, (application as CallMeClaudeApp).calls) }
         // Paired → keep the hub connection in the foreground service; unpaired → stop it.
         // Started from here because foreground services can't be started from the background.
         lifecycleScope.launch {
