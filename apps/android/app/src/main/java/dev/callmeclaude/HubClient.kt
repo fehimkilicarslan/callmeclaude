@@ -3,7 +3,9 @@ package dev.callmeclaude
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
-import android.util.Log
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CoroutineScope
@@ -89,6 +91,17 @@ class HubClient(
     /** Last frame of any kind from the hub (elapsedRealtime); written on OkHttp's reader thread. */
     @Volatile private var lastReceived = 0L
 
+    private val remote = RemoteLog(SystemClock::elapsedRealtime)
+    private val clock = SimpleDateFormat("HH:mm:ss.SSS", Locale.US)
+
+    init {
+        remote.setSecrets(RemoteLog.secretsOf(_pairing.value, deviceName))
+        AppLog.sink = { level, tag, msg ->
+            val time = synchronized(clock) { clock.format(Date()) }
+            post { if (remote.add(level, tag, msg, time)) flushLogs() }
+        }
+    }
+
     private fun post(block: () -> Unit) {
         scope.launch { block() }
     }
@@ -133,7 +146,7 @@ class HubClient(
     /** Carries out [LinkPolicy]'s decisions. Hub thread only. */
     private fun apply(why: String, effects: List<LinkPolicy.Effect>) {
         if (effects.isNotEmpty() && effects != listOf(LinkPolicy.Effect.Ping)) {
-            Log.d(TAG, "link: $why → $effects (inCall=${policy.inCall})")
+            AppLog.d(TAG, "link: $why → $effects (inCall=${policy.inCall})")
         }
         for (e in effects) {
             when (e) {
@@ -171,7 +184,7 @@ class HubClient(
         generation += 1
         val gen = generation
         _status.value = if (policy.inCall && !isConnected) "Reconnecting…" else "Connecting…"
-        Log.d(TAG, "connecting: racing ${p.urls.size} addresses (timeout ${timeoutMs}ms)")
+        AppLog.i(TAG, "connecting: racing ${p.urls.size} addresses (timeout ${timeoutMs}ms)")
         val auth = AppMessages.auth(p.token, deviceName)
         p.urls.forEachIndexed { i, s ->
             val req = try {
@@ -188,7 +201,7 @@ class HubClient(
         scope.launch {
             delay(timeoutMs)
             if (gen != generation || isConnected) return@launch
-            Log.d(TAG, "connect: no address answered within ${timeoutMs}ms")
+            AppLog.i(TAG, "connect: no address answered within ${timeoutMs}ms")
             candidates.forEach { it.cancel() }
             candidates.clear()
             task?.cancel()
@@ -220,7 +233,7 @@ class HubClient(
                     task = webSocket
                     candidates.filter { it !== webSocket }.forEach { it.cancel() }
                     candidates.clear()
-                    Log.d(TAG, "connected via #$index $host")
+                    AppLog.i(TAG, "connected via #$index $host")
                     handle(text)
                 } else if (task === webSocket) {
                     handle(text)
@@ -249,7 +262,7 @@ class HubClient(
 
         private fun ended(webSocket: WebSocket, why: String) = post {
             if (task == null && candidates.remove(webSocket)) {
-                Log.d(TAG, "address #$index $host failed: $why")
+                AppLog.i(TAG, "address #$index $host failed: $why")
                 if (candidates.isEmpty() && gen == generation) apply("all addresses failed", policy.allAddressesFailed())
             } else if (task === webSocket && gen == generation) {
                 close("receive: $why")
@@ -260,7 +273,7 @@ class HubClient(
 
     /** Tear down the established connection (dead, or on a network that is gone). */
     private fun close(why: String) {
-        Log.d(TAG, "connection lost: $why")
+        AppLog.i(TAG, "connection lost: $why")
         task?.cancel()
         task = null
         generation += 1
@@ -332,11 +345,12 @@ class HubClient(
                 apply("hello", policy.connected())
                 _status.value = "Connected to ${_pairing.value?.name ?: "computer"}"
                 flushWaiters(true)
+                flushLogs()
                 onConnected?.invoke()
             }
             is HubMessage.SnapshotUpdate -> msg.snapshot?.let { _snapshot.value = it }
             is HubMessage.Heartbeat -> Unit
-            is HubMessage.Error -> Log.d(TAG, "hub error: ${msg.message}")
+            is HubMessage.Error -> AppLog.i(TAG, "hub error: ${msg.message}")
             else -> onMessage?.invoke(msg)
         }
     }
@@ -344,6 +358,13 @@ class HubClient(
     // endregion
 
     // region send
+
+    /** Hub thread only. Like iOS: everything buffered goes out right after hello and then as it comes. */
+    private fun flushLogs() {
+        if (!isConnected || remote.pending == 0) return
+        val t = task ?: return
+        t.send(AppMessages.log(remote.drain()))
+    }
 
     fun sendJSON(text: String) {
         task?.send(text)

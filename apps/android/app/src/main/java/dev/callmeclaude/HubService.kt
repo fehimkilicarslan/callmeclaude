@@ -10,7 +10,6 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
-import android.util.Log
 import dev.callmeclaude.calls.CallManager
 import dev.callmeclaude.calls.CallNotifications
 import dev.callmeclaude.ui.hasLocalNetworkPermission
@@ -102,7 +101,7 @@ class HubService : Service() {
             return
         }
         if (!startForegroundTyped(n, want) && want != ringTypes()) {
-            Log.w(TAG, "microphone foreground type refused; continuing as phoneCall only")
+            AppLog.w(TAG, "microphone foreground type refused; continuing as phoneCall only")
             startForegroundTyped(n, ringTypes())
         }
     }
@@ -111,11 +110,11 @@ class HubService : Service() {
         startForeground(NOTIFICATION_ID, n, types)
         foreground = true
         this.types = types
-        Log.d(TAG, "foreground types=0x${Integer.toHexString(types)}")
+        AppLog.i(TAG, "foreground types=0x${Integer.toHexString(types)}")
         true
     } catch (e: RuntimeException) {
         // ForegroundServiceStartNotAllowedException / SecurityException (missing eligibility for a type).
-        Log.w(TAG, "startForeground(types=$types) failed: $e")
+        AppLog.w(TAG, "startForeground(types=$types) failed: $e")
         false
     }
 
@@ -171,7 +170,7 @@ class HubService : Service() {
             if (s != null) {
                 s.applyCall(c)
             } else if (c != null) {
-                Log.w(TAG, "call ${c.callId} without the hub service running")
+                AppLog.w(TAG, "call ${c.callId} without the hub service running")
             }
         }
 
@@ -186,7 +185,7 @@ class HubService : Service() {
                 context.startForegroundService(i)
             } catch (e: IllegalStateException) {
                 // ForegroundServiceStartNotAllowedException (API 31+) extends IllegalStateException.
-                Log.w(TAG, "could not start the service: $e")
+                AppLog.w(TAG, "could not start the service: $e")
             }
         }
 

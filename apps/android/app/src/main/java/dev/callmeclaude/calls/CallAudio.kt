@@ -12,7 +12,7 @@ import android.media.MediaRecorder
 import android.media.audiofx.AcousticEchoCanceler
 import android.media.audiofx.NoiseSuppressor
 import android.os.Process
-import android.util.Log
+import dev.callmeclaude.AppLog
 
 /**
  * Full-duplex call audio, off the main thread.
@@ -70,7 +70,7 @@ class CallAudio(
                 t.flush()
                 t.play()
             } catch (e: IllegalStateException) {
-                Log.w(TAG, "flush: $e")
+                AppLog.w(TAG, "flush: $e")
             }
         }
     }
@@ -95,16 +95,16 @@ class CallAudio(
                     if (NoiseSuppressor.isAvailable()) NoiseSuppressor.create(r.audioSessionId)?.let { it.enabled = true; effects += it }
                     r.startRecording()
                     rec = r
-                    Log.d(TAG, "mic started: aec=${effects.any { it is AcousticEchoCanceler }} ns=${effects.any { it is NoiseSuppressor }}")
+                    AppLog.i(TAG, "mic started: aec=${effects.any { it is AcousticEchoCanceler }} ns=${effects.any { it is NoiseSuppressor }}")
                 } else {
                     r.release()
-                    Log.w(TAG, "AudioRecord failed to initialize: sending silence")
+                    AppLog.w(TAG, "AudioRecord failed to initialize: sending silence")
                 }
             } catch (e: RuntimeException) {
-                Log.w(TAG, "AudioRecord failed: $e: sending silence")
+                AppLog.w(TAG, "AudioRecord failed: $e: sending silence")
             }
         } else {
-            Log.w(TAG, "no RECORD_AUDIO permission: sending silence")
+            AppLog.w(TAG, "no RECORD_AUDIO permission: sending silence")
         }
         val pump = MicPump(
             read = { b -> rec?.read(b, 0, b.size) ?: -1 },
@@ -119,7 +119,7 @@ class CallAudio(
                 micBytes = pump.sentBytes
                 val now = System.currentTimeMillis()
                 if (now - lastLog >= 5_000) {
-                    Log.d(TAG, "audio 5s: mic→hub ${(micBytes - lastBytes) / 1024}KB${if (muted()) " (muted)" else ""}, hub→speaker total ${playedBytes / 1024}KB, queued ${queue.bytes / 1024}KB")
+                    AppLog.i(TAG, "audio 5s: mic→hub ${(micBytes - lastBytes) / 1024}KB${if (muted()) " (muted)" else ""}, hub→speaker total ${playedBytes / 1024}KB, queued ${queue.bytes / 1024}KB")
                     lastBytes = micBytes
                     lastLog = now
                 }
@@ -130,7 +130,7 @@ class CallAudio(
                 try { it.stop() } catch (_: IllegalStateException) {}
                 it.release()
             }
-            Log.d(TAG, "audio stopped: mic=${micBytes / (MIC_RATE * 2)}s sent, played=${playedBytes / (PLAY_RATE * 2)}s, dropped=${queue.dropped / (PLAY_RATE * 2)}s")
+            AppLog.i(TAG, "audio stopped: mic=${micBytes / (MIC_RATE * 2)}s sent, played=${playedBytes / (PLAY_RATE * 2)}s, dropped=${queue.dropped / (PLAY_RATE * 2)}s")
         }
     }
 
@@ -156,7 +156,7 @@ class CallAudio(
                 .setBufferSizeInBytes(maxOf(min, PLAY_RATE * 2 / 5)) // ≥ 200 ms
                 .build()
         } catch (e: RuntimeException) {
-            Log.w(TAG, "AudioTrack failed: $e")
+            AppLog.w(TAG, "AudioTrack failed: $e")
             return
         }
         track = t
@@ -169,7 +169,7 @@ class CallAudio(
                 while (off < chunk.size && s.running && gen == queue.generation) {
                     val n = t.write(chunk, off, minOf(SLICE, chunk.size - off))
                     if (n < 0) {
-                        Log.w(TAG, "AudioTrack.write: $n")
+                        AppLog.w(TAG, "AudioTrack.write: $n")
                         break
                     }
                     off += n
