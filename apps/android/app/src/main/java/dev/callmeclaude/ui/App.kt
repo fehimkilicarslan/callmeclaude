@@ -33,12 +33,16 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarDuration
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -51,7 +55,10 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.flowWithLifecycle
+import kotlinx.coroutines.flow.filterNotNull
 import androidx.compose.foundation.clickable
 import dev.callmeclaude.ACCESS_LOCAL_NETWORK
 import dev.callmeclaude.Decision
@@ -97,6 +104,7 @@ private fun HomeScreen(hub: HubClient, calls: CallManager, onSettings: () -> Uni
     val snapshot by hub.snapshot.collectAsStateWithLifecycle()
     val status by hub.status.collectAsStateWithLifecycle()
     val pairing by hub.pairing.collectAsStateWithLifecycle()
+    val snackbar = remember { SnackbarHostState() }
     var confirmPanic by remember { mutableStateOf(false) }
     var refreshing by remember { mutableStateOf(false) }
 
@@ -117,8 +125,19 @@ private fun HomeScreen(hub: HubClient, calls: CallManager, onSettings: () -> Uni
     val pending = snapshot?.pending.orEmpty()
     val paused = snapshot?.paused == true
 
+    // Hub errors outside a call: shown as the hub sent them, once, then gone.
+    // Collected only while the screen is visible, so a notice isn't consumed in the background.
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    LaunchedEffect(lifecycle) {
+        calls.notice.flowWithLifecycle(lifecycle).filterNotNull().collect { n ->
+            calls.noticeShown(n.id)
+            snackbar.showSnackbar(n.message, withDismissAction = true, duration = SnackbarDuration.Long)
+        }
+    }
+
     Scaffold(
         containerColor = Palette.bg,
+        snackbarHost = { SnackbarHost(snackbar) },
         topBar = {
             TopAppBar(
                 title = { Text("CallMeClaude", fontWeight = FontWeight.SemiBold) },

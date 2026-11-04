@@ -58,7 +58,7 @@ class HubClient(
     /** Binary frames (assistant audio). Called on OkHttp's reader thread. */
     @Volatile var onBinary: ((ByteString) -> Unit)? = null
 
-    /** Messages the client doesn't handle itself (call.*, audio.flush, transcript…). Called on the hub thread. */
+    /** Messages the client doesn't handle itself (call.*, audio.flush, transcript, error…). Called on the hub thread. */
     @Volatile var onMessage: ((HubMessage) -> Unit)? = null
 
     /** Fired after every successful (re)connection + hello. Called on the hub thread. */
@@ -372,7 +372,10 @@ class HubClient(
             }
             is HubMessage.SnapshotUpdate -> msg.snapshot?.let { _snapshot.value = it }
             is HubMessage.Heartbeat -> Unit
-            is HubMessage.Error -> AppLog.i(TAG, "hub error: ${msg.message}")
+            is HubMessage.Error -> {
+                AppLog.i(TAG, "hub error: ${msg.message}")
+                onMessage?.invoke(msg)
+            }
             else -> onMessage?.invoke(msg)
         }
     }
