@@ -26,6 +26,8 @@ class CallMachine(private val clock: () -> Long) {
         val ready: Boolean = false,
         val connectedAt: Long? = null,
         val unreachable: Boolean = false,
+        /** The hub's `error` that ended this attempt, shown on the call screen until [Event.Dismiss]. */
+        val error: String? = null,
     )
 
     sealed interface Event {
@@ -45,6 +47,10 @@ class CallMachine(private val clock: () -> Long) {
         data class TelecomFailed(val callId: String) : Event
         data class ReadyTimeout(val callId: String) : Event
         data class RingTimeout(val callId: String) : Event
+        /** An `error` from the hub (already de-duplicated by [HubErrors]). It carries no callId. */
+        data class HubError(val message: String) : Event
+        /** The failed call's screen has been shown long enough. */
+        data class Dismiss(val callId: String) : Event
     }
 
     sealed interface Effect {
@@ -61,6 +67,8 @@ class CallMachine(private val clock: () -> Long) {
         data class Schedule(val event: Event, val delayMs: Long) : Effect
         /** Say "your computer can't be reached" locally, then hang up after [UNREACHABLE_HANGUP_MS]. */
         data class Unreachable(val callId: String) : Effect
+        /** Show the hub's error briefly outside a call screen (home screen). */
+        data class Notice(val message: String) : Effect
     }
 
     var active: ActiveCall? = null
@@ -75,7 +83,28 @@ class CallMachine(private val clock: () -> Long) {
     /** Whether `call.start` went out on the current link (reset on every disconnect). */
     private var startSentOnLink = false
 
-    fun handle(e: Event): List<Effect> = when (e) {
+    fun handle(e: Event): List<Effect> {
+        val a = active
+        if (a?.error != null) {
+            // The attempt already failed: Telecom and the mic are released, the screen only shows the
+            // error. Late hub/Telecom events for it must not restart, re-announce or "unreachable" it.
+            when (e) {
+                is Event.Incoming, is Event.Place -> active = null
+                is Event.Dismiss, is Event.HangUp -> {
+                    if (e is Event.HangUp && e.callId != null && e.callId != a.callId) return emptyList()
+                    if (e is Event.Dismiss && e.callId != a.callId) return emptyList()
+                    active = null
+                    return emptyList()
+                }
+                is Event.HubError -> return listOf(Effect.Notice(e.message))
+                Event.HubConnected, Event.HubDisconnected -> Unit
+                else -> return emptyList()
+            }
+        }
+        return dispatch(e)
+    }
+
+    private fun dispatch(e: Event): List<Effect> = when (e) {
         is Event.Incoming -> incoming(e)
         is Event.Place -> place(e)
         is Event.Begin -> begin(e)
@@ -112,6 +141,23 @@ class CallMachine(private val clock: () -> Long) {
         is Event.RingTimeout -> forActive(e.callId) { a ->
             if (a.answered) emptyList() else listOf(Effect.SendEnd(a.callId)) + cleanup(a, EndCause.MISSED)
         }
+        is Event.HubError -> hubError(e.message)
+        is Event.Dismiss -> emptyList()
+    }
+
+    /**
+     * The hub's `error` has no callId. It belongs to the call only while `call.start` is out and
+     * `call.ready` hasn't come back (that's where the hub reports a failed voice start, e.g. a
+     * missing Gemini key); then the attempt ends and its screen shows the message. Anything else is
+     * a notice for the home screen, and a live call goes on.
+     */
+    private fun hubError(message: String): List<Effect> {
+        val a = active
+        if (a == null || !a.answered || a.ready || !startSentOnLink) return listOf(Effect.Notice(message))
+        // The hub already dropped the call (it follows up with call.ended), so no call.end.
+        val out = cleanup(a, EndCause.ERROR)
+        active = a.copy(error = message)
+        return out + Effect.Schedule(Event.Dismiss(a.callId), ERROR_SHOWN_MS)
     }
 
     private fun incoming(e: Event.Incoming): List<Effect> {
@@ -155,7 +201,7 @@ class CallMachine(private val clock: () -> Long) {
 
     private fun sendStartIfNeeded(): List<Effect> {
         val a = active ?: return emptyList()
-        if (!a.answered || !linkUp || startSentOnLink || a.unreachable) return emptyList()
+        if (!a.answered || !linkUp || startSentOnLink || a.unreachable || a.error != null) return emptyList()
         startSentOnLink = true
         // Idempotent on the hub: the same callId re-attaches instead of starting over.
         return listOf(Effect.SendStart(a.callId, a.direction))
@@ -190,6 +236,8 @@ class CallMachine(private val clock: () -> Long) {
         const val RING_TIMEOUT_MS = 50_000L
         const val STUCK_MS = 20_000L
         const val UNREACHABLE_HANGUP_MS = 6_000L
+        /** How long a failed call's screen shows the hub's error before going back home. */
+        const val ERROR_SHOWN_MS = 6_000L
 
         /** "c_" + the first 8 characters of a UUID, lowercase (same as iOS). */
         fun newCallId(uuid: String = java.util.UUID.randomUUID().toString()): String = "c_" + uuid.take(8).lowercase()

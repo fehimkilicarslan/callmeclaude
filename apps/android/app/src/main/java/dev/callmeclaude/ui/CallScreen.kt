@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButtonDefaults
@@ -68,6 +69,7 @@ fun CallScreen(calls: CallManager) {
     }
     val ringing = c.incoming && !c.answered
     val status = when {
+        c.error != null -> "Call ended"
         c.reconnecting -> "Reconnecting…"
         c.connectedAt != null -> {
             val s = ((now - c.connectedAt) / 1000).coerceAtLeast(0)
@@ -120,7 +122,19 @@ private fun CallContent(
             verticalArrangement = Arrangement.spacedBy(6.dp, Alignment.Bottom),
             modifier = Modifier.weight(1f).fillMaxWidth(),
         ) {
-            if (!ringing) {
+            if (c.error != null) {
+                // Exactly what the hub sent: the app adds no interpretation of its own.
+                Text(
+                    c.error,
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = Color.White,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(Palette.red.copy(alpha = 0.22f), RoundedCornerShape(14.dp))
+                        .padding(16.dp),
+                )
+            } else if (!ringing) {
                 lines.takeLast(3).forEach { l ->
                     Text(
                         l.text,
@@ -135,7 +149,11 @@ private fun CallContent(
             }
         }
         Spacer(Modifier.height(24.dp))
-        if (ringing) {
+        if (c.error != null) {
+            Box(Modifier.padding(top = 44.dp, bottom = 70.dp)) {
+                RoundAction(R.drawable.ic_call_end, "Close", Palette.red, label = "Close") { calls.hangUp() }
+            }
+        } else if (ringing) {
             Row(horizontalArrangement = Arrangement.spacedBy(96.dp), modifier = Modifier.padding(bottom = 70.dp)) {
                 RoundAction(R.drawable.ic_call_end, "Decline", Palette.red) { calls.decline() }
                 RoundAction(R.drawable.ic_call, "Answer", Palette.green) { calls.answer() }

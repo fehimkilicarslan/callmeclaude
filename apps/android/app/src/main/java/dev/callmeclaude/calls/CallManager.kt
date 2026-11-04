@@ -9,6 +9,7 @@ import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.speech.tts.TextToSpeech
 import android.telecom.DisconnectCause
 import android.telecom.PhoneAccount
@@ -16,6 +17,7 @@ import android.telecom.PhoneAccountHandle
 import android.telecom.TelecomManager
 import dev.callmeclaude.AppLog
 import dev.callmeclaude.HubClient
+import dev.callmeclaude.HubErrors
 import dev.callmeclaude.HubMessage
 import dev.callmeclaude.AppMessages
 import dev.callmeclaude.HubService
@@ -58,7 +60,12 @@ class CallManager(
         val silenced: Boolean,
         /** Answered and talking, but the link to the hub dropped: we're reconnecting. */
         val reconnecting: Boolean = false,
+        /** The hub's error that ended this attempt, as the hub sent it. The call itself is over. */
+        val error: String? = null,
     )
+
+    /** A hub error outside a call attempt, shown briefly on the home screen. */
+    data class Notice(val id: Long, val message: String)
 
     data class Line(val role: String, val text: String, val final: Boolean)
 
@@ -71,6 +78,8 @@ class CallManager(
     private var tts: TextToSpeech? = null
     private var ringingShownFor: String? = null
     private var silencedFor: String? = null
+    private val errors = HubErrors(SystemClock::elapsedRealtime)
+    private var noticeSeq = 0L
 
     val accountHandle = PhoneAccountHandle(ComponentName(context, CmcConnectionService::class.java), "claude")
 
@@ -79,12 +88,15 @@ class CallManager(
     private val _speaker = MutableStateFlow(prefs.getBoolean("speaker", false))
     private val _routes = MutableStateFlow(AudioRoutesUi.EMPTY)
     private val _transcript = MutableStateFlow<List<Line>>(emptyList())
+    private val _notice = MutableStateFlow<Notice?>(null)
     val ui: StateFlow<CallUi?> = _ui.asStateFlow()
     val muted: StateFlow<Boolean> = _muted.asStateFlow()
     val speaker: StateFlow<Boolean> = _speaker.asStateFlow()
     /** Audio outputs Telecom offers for the live call, the active one marked (empty outside a call). */
     val routes: StateFlow<AudioRoutesUi> = _routes.asStateFlow()
     val transcript: StateFlow<List<Line>> = _transcript.asStateFlow()
+    /** The latest hub error to show on the home screen; cleared once shown or after [NOTICE_MS]. */
+    val notice: StateFlow<Notice?> = _notice.asStateFlow()
 
     /** Read by the mic thread: send silence instead of the microphone while true. */
     @Volatile var micMuted = false
@@ -135,6 +147,11 @@ class CallManager(
     }
 
     fun hangUp() = dispatch(Event.HangUp())
+
+    /** The home screen displayed [id]; don't show it again. */
+    fun noticeShown(id: Long) {
+        if (_notice.value?.id == id) _notice.value = null
+    }
 
     fun setMuted(on: Boolean) {
         _muted.value = on
@@ -233,6 +250,7 @@ class CallManager(
             is HubMessage.CallEnded -> dispatch(Event.HubEnded(m.callId, m.reason))
             HubMessage.AudioFlush -> audio.flush()
             is HubMessage.Transcript -> if (machine.active != null) addLine(Line(m.role, m.text, m.final))
+            is HubMessage.Error -> if (errors.accept(m.message)) dispatch(Event.HubError(m.message))
             else -> Unit
         }
     }
@@ -246,6 +264,8 @@ class CallManager(
     }
 
     fun dispatch(e: Event) {
+        // A new attempt may fail the same way as the last one: show that error again.
+        if (e is Event.Place || e is Event.Incoming) errors.reset()
         val wasActive = machine.active != null
         val effects = machine.handle(e)
         if (effects.isNotEmpty() || e !is Event.HubConnected) AppLog.i(TAG, "$e → $effects")
@@ -269,10 +289,12 @@ class CallManager(
                 ringing = ringingShownFor == it.callId,
                 silenced = silencedFor == it.callId,
                 reconnecting = machine.reconnecting,
+                error = it.error,
             )
         }
         _ui.value = ui
-        HubService.callChanged(context, ui)
+        // A failed attempt only lingers on screen: Telecom and the microphone are already released.
+        HubService.callChanged(context, ui?.takeIf { it.error == null })
     }
 
     // placeCall needs MANAGE_OWN_CALLS, an install-time permission; failures are caught below anyway.
@@ -338,6 +360,11 @@ class CallManager(
             }
             is Effect.Schedule -> main.postDelayed({ dispatch(f.event) }, f.delayMs)
             is Effect.Unreachable -> speakUnreachable()
+            is Effect.Notice -> {
+                val n = Notice(++noticeSeq, f.message)
+                _notice.value = n
+                main.postDelayed({ noticeShown(n.id) }, NOTICE_MS)
+            }
         }
     }
 
@@ -377,6 +404,8 @@ class CallManager(
         private const val HUB_REASON = HubClient.REASON_CALL
         const val EXTRA_CALL_ID = "dev.callmeclaude.CALL_ID"
         const val EXTRA_TITLE = "dev.callmeclaude.TITLE"
+        /** A notice nobody saw (app in the background) is dropped after this long. */
+        const val NOTICE_MS = 10_000L
 
         fun displayName(title: String) = if (title.isEmpty() || title == "Claude") "Claude" else "Claude · $title"
 
