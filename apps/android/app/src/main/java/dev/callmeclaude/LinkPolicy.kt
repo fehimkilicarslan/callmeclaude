@@ -53,11 +53,33 @@ class LinkPolicy {
         private set
     var retryPending = false
         private set
+    /**
+     * The hub closed the socket with [BAD_TOKEN]: the pairing is no longer valid. Retrying can't fix
+     * that, so nothing reconnects until a new pairing is set ([paired]).
+     */
+    var rejected = false
+        private set
 
     val timing: Timing get() = if (inCall) CALL else IDLE
 
     /** Something needs the link (UI, service, call, a waiter). */
-    fun connectRequested(): List<Effect> = if (link == Link.DOWN) connectNow() else emptyList()
+    fun connectRequested(): List<Effect> = if (link == Link.DOWN && !rejected) connectNow() else emptyList()
+
+    /** A (new) pairing was stored: forget an earlier rejection. */
+    fun paired() {
+        rejected = false
+    }
+
+    /**
+     * The hub answered with close code [BAD_TOKEN] (on the winning socket or on any racing address:
+     * a hub that answers at all is authoritative about its token). Stop everything and stay down.
+     */
+    fun tokenRejected(): List<Effect> {
+        val wasUp = link == Link.UP
+        rejected = true
+        link = Link.DOWN
+        return (if (wasUp) listOf(Effect.Close) else emptyList()) + cancelRetry()
+    }
 
     /** The link isn't wanted any more (or can't be: not paired); a Connect was not carried out. */
     fun stopped(): List<Effect> {
@@ -101,7 +123,7 @@ class LinkPolicy {
 
     fun retryFired(): List<Effect> {
         retryPending = false
-        return if (link == Link.DOWN) connectNow() else emptyList()
+        return if (link == Link.DOWN && !rejected) connectNow() else emptyList()
     }
 
     /** The system has no default network any more. */
@@ -123,8 +145,8 @@ class LinkPolicy {
         val before = network
         network = id
         return when (link) {
-            // Waiting out a back-off: the network is back, go now.
-            Link.DOWN -> connectNow()
+            // Waiting out a back-off: the network is back, go now (unless the token was refused).
+            Link.DOWN -> if (rejected) emptyList() else connectNow()
             // A race started on another (or no) network is doomed: restart it on this one.
             Link.CONNECTING -> if (before != id) connectNow() else emptyList()
             Link.UP -> when {
@@ -172,6 +194,9 @@ class LinkPolicy {
         /** iOS HubClient.swift: 7 s race, 3 s after a failed race, 0.5 s after a drop. */
         val IDLE = Timing(attemptTimeoutMs = 7_000, retryAfterFailureMs = 3_000, retryAfterDropMs = 500)
         val CALL = Timing(attemptTimeoutMs = 4_000, retryAfterFailureMs = 1_000, retryAfterDropMs = 0)
+
+        /** WebSocket close code the hub uses for a wrong app token (apps/mac-agent/src/appServer.ts). */
+        const val BAD_TOKEN = 4003
 
         const val CALL_TICK_MS = 2_000L
         const val CALL_SILENCE_MS = 6_000L

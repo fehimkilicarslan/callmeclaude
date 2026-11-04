@@ -44,12 +44,16 @@ class HubClient(
     private val _lastSeen = MutableStateFlow<Long?>(null)
     private val _status = MutableStateFlow("Not connected")
     private val _pairing = MutableStateFlow(store.load())
+    private val _pairingInvalid = MutableStateFlow(false)
 
     val connected: StateFlow<Boolean> = _connected.asStateFlow()
     val snapshot: StateFlow<Snapshot?> = _snapshot.asStateFlow()
     val lastSeen: StateFlow<Long?> = _lastSeen.asStateFlow()
     val status: StateFlow<String> = _status.asStateFlow()
     val pairing: StateFlow<PairingInfo?> = _pairing.asStateFlow()
+
+    /** The hub refused the stored token (close code 4003). Cleared by [setPairing]. */
+    val pairingInvalid: StateFlow<Boolean> = _pairingInvalid.asStateFlow()
 
     /** Binary frames (assistant audio). Called on OkHttp's reader thread. */
     @Volatile var onBinary: ((ByteString) -> Unit)? = null
@@ -133,7 +137,7 @@ class HubClient(
     }
 
     private val shouldStayConnected: Boolean
-        get() = _pairing.value != null && (activeReasons.isNotEmpty() || helloWaiters.isNotEmpty())
+        get() = _pairing.value != null && !policy.rejected && (activeReasons.isNotEmpty() || helloWaiters.isNotEmpty())
 
     /** From [NetworkWatcher] (any thread). */
     fun networkChanged(change: NetworkWatcher.Change) = post {
@@ -253,7 +257,22 @@ class HubClient(
 
         override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
             webSocket.close(1000, null)
-            ended(webSocket, "closed by hub: $code $reason")
+            if (code == LinkPolicy.BAD_TOKEN) rejected(webSocket) else ended(webSocket, "closed by hub: $code $reason")
+        }
+
+        /** The hub refused our token: give up instead of retrying forever. */
+        private fun rejected(webSocket: WebSocket) = post {
+            if (gen != generation || (task !== webSocket && webSocket !in candidates)) return@post
+            AppLog.w(TAG, "hub refused the pairing token (4003): pairing is no longer valid")
+            candidates.forEach { if (it !== webSocket) it.cancel() }
+            candidates.clear()
+            val effects = policy.tokenRejected()
+            if (task != null) close("token refused")
+            apply("token refused", effects - LinkPolicy.Effect.Close)
+            generation += 1
+            _pairingInvalid.value = true
+            _status.value = PAIRING_INVALID
+            flushWaiters(false)
         }
 
         override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
@@ -319,6 +338,9 @@ class HubClient(
     fun setPairing(p: PairingInfo?) = post {
         store.save(p)
         _pairing.value = p
+        _pairingInvalid.value = false
+        policy.paired()
+        remote.setSecrets(RemoteLog.secretsOf(p, deviceName))
         if (p == null) _snapshot.value = null
         generation += 1
         task?.close(1000, null)
@@ -388,5 +410,6 @@ class HubClient(
         private const val TAG = "cmc.hub"
         /** The [setActive] reason of a live call: reconnect faster while it is set. */
         const val REASON_CALL = "call"
+        const val PAIRING_INVALID = "Pairing is no longer valid"
     }
 }

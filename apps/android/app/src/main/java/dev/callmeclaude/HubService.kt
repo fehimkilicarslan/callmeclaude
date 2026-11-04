@@ -45,13 +45,13 @@ class HubService : Service() {
         current = this
         app.hub.setActive(REASON, true)
         scope.launch {
-            combine(app.hub.connected, app.hub.status, app.hub.pairing) { c, s, p -> Triple(c, s, p) }
-                .collect { (connected, status, pairing) ->
-                    if (pairing == null) {
+            combine(app.hub.connected, app.hub.status, app.hub.pairing, app.hub.pairingInvalid) { c, s, p, bad -> Status(c, s, p, bad) }
+                .collect { st ->
+                    if (st.pairing == null) {
                         stopSelf()
                         return@collect
                     }
-                    if (foreground && call == null) notify(statusNotification(connected, status, pairing.name))
+                    if (foreground && call == null) notify(statusNotification(st.connected, st.status, st.pairing.name, st.invalid))
                 }
         }
     }
@@ -78,9 +78,11 @@ class HubService : Service() {
         super.onDestroy()
     }
 
+    private data class Status(val connected: Boolean, val status: String, val pairing: PairingInfo?, val invalid: Boolean)
+
     private fun currentStatus(): Notification {
         val hub = app.hub
-        return statusNotification(hub.connected.value, hub.status.value, hub.pairing.value?.name)
+        return statusNotification(hub.connected.value, hub.status.value, hub.pairing.value?.name, hub.pairingInvalid.value)
     }
 
     /** Ringing / in call / back to idle: swap the notification and the foreground service types. */
@@ -122,14 +124,16 @@ class HubService : Service() {
         getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, n)
     }
 
-    private fun statusNotification(connected: Boolean, status: String, name: String?): Notification {
+    private fun statusNotification(connected: Boolean, status: String, name: String?, invalid: Boolean): Notification {
         val open = PendingIntent.getActivity(
             this, 0,
             Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
         val access = localNetworkAccess(Build.VERSION.SDK_INT, hasLocalNetworkPermission(this), blockedAfterRequest = false)
-        val (title, text) = when (val view = connectionView(connected, status, name ?: "your computer", access)) {
+        val (title, text) = if (invalid) {
+            HubClient.PAIRING_INVALID to "Open CallMeClaude and pair again."
+        } else when (val view = connectionView(connected, status, name ?: "your computer", access)) {
             is ConnectionView.Connected -> "Connected to ${view.name}" to "Claude can call you."
             is ConnectionView.Offline -> view.status to "Claude can't call you until this reconnects."
             is ConnectionView.NeedsLocalNetwork -> "Local network access needed" to LOCAL_NETWORK_RATIONALE
