@@ -96,6 +96,24 @@
                 android:value="Keeps a WebSocket open to the user's own paired computer so it can ring this phone when a Claude Code session needs the user. No push service is used." />
         </service>
 
+        <!--
+            Optional second app-list entry "Call Claude" (Settings → Quick call). For routines and
+            voice assistants ("open Call Claude"), which can only open an app's launcher entry.
+            Off by default; toggled with PackageManager.setComponentEnabledSetting (LauncherEntry).
+        -->
+        <activity-alias
+            android:name=".CallClaudeEntry"
+            android:enabled="false"
+            android:exported="true"
+            android:icon="@drawable/ic_shortcut_call"
+            android:label="@string/call_claude"
+            android:targetActivity=".CallClaudeActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+
         <!-- "Call Claude" quick settings tile; tapping opens CallClaudeActivity. -->
         <service
             android:name=".CallClaudeTileService"

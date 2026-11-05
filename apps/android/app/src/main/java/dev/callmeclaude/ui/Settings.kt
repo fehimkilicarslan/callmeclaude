@@ -20,6 +20,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -29,6 +30,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
@@ -36,6 +38,7 @@ import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.callmeclaude.HubClient
+import dev.callmeclaude.LauncherEntry
 import dev.callmeclaude.warnings
 import java.util.Date
 
@@ -127,6 +130,29 @@ fun SettingsScreen(hub: HubClient, onDone: () -> Unit) {
                 }
             }
             Footer("Claude speaks this language on calls and writes session summaries in it. Takes full effect from the next call.")
+
+            SectionTitle("Quick call")
+            Card {
+                // Read from PackageManager each time; not stored anywhere else.
+                var entry by remember { mutableStateOf(LauncherEntry.isEnabled(context)) }
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text("\"Call Claude\" in the app list", modifier = Modifier.weight(1f))
+                    Switch(
+                        checked = entry,
+                        onCheckedChange = { on ->
+                            LauncherEntry.setEnabled(context, on)
+                            entry = LauncherEntry.isEnabled(context)
+                        },
+                    )
+                }
+            }
+            Footer(
+                "For routines and voice assistants (\"open Call Claude\"): opening it starts a call straight away. " +
+                    "When on, a second icon appears in the app list. Long-press the app icon or add the quick settings tile for the same call.",
+            )
 
             SectionTitle("About")
             Card {
