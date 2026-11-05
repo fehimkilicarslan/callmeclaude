@@ -62,7 +62,15 @@ export const declarationsFor = (p: Pick<Platform, 'words'>): FunctionDeclaration
   {
     name: 'computer_task',
     description: `Let the hub itself operate ${p.words.the}: click in the browser, submit a form, use an app. Can take a while; the result arrives later.`,
-    parametersJsonSchema: obj({ task: str('Precise description of what to do'), project: str('Related project (optional)'), confirmed: CONFIRMED }, ['task']),
+    parametersJsonSchema: obj(
+      {
+        task: str('Precise description of the computer part only'),
+        goal: str("The developer's WHOLE request, including the steps after this computer part (e.g. then start a session in folder X and do what the message asks)"),
+        project: str('Related project (optional)'),
+        confirmed: CONFIRMED,
+      },
+      ['task', 'goal'],
+    ),
     behavior: Behavior.NON_BLOCKING,
   },
   {

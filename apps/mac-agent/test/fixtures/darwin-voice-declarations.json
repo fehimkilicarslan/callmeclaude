@@ -155,7 +155,11 @@
       "properties": {
         "task": {
           "type": "string",
-          "description": "Precise description of what to do"
+          "description": "Precise description of the computer part only"
+        },
+        "goal": {
+          "type": "string",
+          "description": "The developer's WHOLE request, including the steps after this computer part (e.g. then start a session in folder X and do what the message asks)"
         },
         "project": {
           "type": "string",
@@ -167,7 +171,8 @@
         }
       },
       "required": [
-        "task"
+        "task",
+        "goal"
       ]
     },
     "behavior": "NON_BLOCKING"

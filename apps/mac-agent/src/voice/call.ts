@@ -10,7 +10,7 @@ import type { HubToApp } from '@callmeclaude/protocol';
 import type { Hub } from '../hub.ts';
 import type { CallItem } from '../calls.ts';
 import { geminiKeyProblem, getSecret } from '../secrets.ts';
-import { audit, log, redact } from '../util.ts';
+import { audit, clip, log, redact } from '../util.ts';
 import { briefing, systemPrompt } from './prompt.ts';
 import { declarations, LONG_TOOLS, runTool } from './tools.ts';
 
@@ -217,7 +217,7 @@ export class VoiceCall {
     } catch (e) {
       response = { error: (e as Error).message };
     }
-    if (this.ended) return;
+    if (this.ended) return this.afterCall(name, args, response);
     this.lastActivity = Date.now();
     const long = LONG_TOOLS.has(name);
     this.live?.sendToolResponse({
@@ -229,6 +229,18 @@ export class VoiceCall {
           ...(long ? { scheduling: FunctionResponseScheduling.WHEN_IDLE } : {}),
         },
       ],
+    });
+  }
+
+  /** A computer task finished after the call ended: its result must not be lost, so call the developer back with it. */
+  private afterCall(name: string, args: Record<string, unknown>, response: Record<string, unknown>) {
+    if (name !== 'computer_task' || response.needs_confirmation || response.error) return;
+    const goal = args.goal ? ` The developer's whole request was: "${String(args.goal)}". Tell them the result and continue with the remaining steps (ask before starting anything).` : ' Tell the developer the result and ask what to do next.';
+    this.hub.calls.enqueue({
+      priority: 'P1',
+      title: 'Computer task done',
+      text: `The computer task "${String(args.task ?? '')}" finished after the last call. Result: ${clip(String(response.result ?? ''), 1500)}.${goal}`,
+      requested: true,
     });
   }
 

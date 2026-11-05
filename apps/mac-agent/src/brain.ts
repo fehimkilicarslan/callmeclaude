@@ -1,4 +1,6 @@
-import { existsSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { AUDIT_DIR } from './config.ts';
 import type { CanUseTool } from '@anthropic-ai/claude-agent-sdk';
 import type { Hub } from './hub.ts';
 import { runAgent } from './claude.ts';
@@ -97,12 +99,16 @@ export async function askBrain(hub: Hub, question: string): Promise<string> {
     summary: s.summary,
     transcript: existsSync(s.transcriptPath) ? s.transcriptPath : undefined,
   }));
-  const system = `You are the CallMeClaude brain. The developer asked a question on a phone call. Answer it by reading the session transcripts (JSONL) and the project folders.
+  const history = recentActivity();
+  const folders = projectFolders(hub.cfg.projectRoots);
+  const system = `You are the CallMeClaude brain. The developer asked a question on a phone call. Answer it by reading the recent hub activity below, the session transcripts (JSONL) and the project folders.
+Questions like "what happened to what I asked earlier" are usually answered by RECENT ACTIVITY (earlier phone calls and computer tasks): check it first.
+Names come from speech recognition and may be misheard (e.g. "Çeçen" for "Çaça"): match them loosely against the activity and the folder names.
 READ ONLY: never modify files or change anything with commands. For large transcripts look at the end (tail, grep).
 Answer in at most 2-3 short sentences in ${languageName(hub.cfg.language)}; it will be read aloud on a phone, so no code, paths or URLs.`;
   try {
     const r = await runAgent({
-      task: `Sessions:\n${JSON.stringify(sessions, null, 1)}\n\nQuestion: ${question}`,
+      task: `Sessions:\n${JSON.stringify(sessions, null, 1)}\n\nProject folders:\n${folders}\n\nRECENT ACTIVITY (oldest first):\n${history}\n\nQuestion: ${question}`,
       model: hub.cfg.claude.brainModel,
       system,
       tools: ['Read', 'Grep', 'Glob', 'Bash'],
@@ -118,4 +124,46 @@ Answer in at most 2-3 short sentences in ${languageName(hub.cfg.language)}; it w
   } catch (e) {
     return `I couldn't answer right now: ${(e as Error).message}`;
   }
+}
+
+/** Earlier phone calls and computer tasks from the audit log (last 2 days), so the brain can answer "what happened to X?". */
+export function recentActivity(dir = AUDIT_DIR, maxCalls = 5): string {
+  let files: string[] = [];
+  try {
+    files = readdirSync(dir).filter((f) => /^\d{4}-\d{2}-\d{2}\.jsonl$/.test(f)).sort().slice(-2);
+  } catch {
+    return '(none)';
+  }
+  const out: string[] = [];
+  for (const f of files) {
+    for (const line of readFileSync(join(dir, f), 'utf8').split('\n')) {
+      if (!line) continue;
+      let e: any;
+      try {
+        e = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      const at = String(e.ts ?? '').slice(0, 16).replace('T', ' ');
+      if (e.kind === 'call.end' && Array.isArray(e.transcript) && e.transcript.length)
+        out.push(`[${at} UTC] Phone call (${e.reason}):\n` + clip(e.transcript.map((x: any) => `  ${x.role}: ${x.text}`).join('\n'), 2500));
+      else if (e.kind === 'computer.done') out.push(`[${at} UTC] Computer task "${e.task}" finished: ${clip(String(e.result ?? ''), 600)}`);
+      else if (e.kind === 'voice.tool' && e.name === 'start_session') out.push(`[${at} UTC] Session start requested: ${clip(JSON.stringify(e.args), 400)}`);
+    }
+  }
+  // Keep the newest few calls and everything after the oldest kept call.
+  const callIdx = out.map((s, i) => (s.includes('Phone call') ? i : -1)).filter((i) => i >= 0);
+  const from = callIdx.length > maxCalls ? callIdx[callIdx.length - maxCalls] : 0;
+  return redact(out.slice(from).join('\n')) || '(none)';
+}
+
+function projectFolders(roots: string[]): string {
+  const out: string[] = [];
+  for (const r of roots) {
+    try {
+      const names = readdirSync(r, { withFileTypes: true }).filter((d) => d.isDirectory() && !d.name.startsWith('.')).map((d) => d.name);
+      out.push(`${r}: ${names.slice(0, 150).join(', ')}`);
+    } catch {}
+  }
+  return out.join('\n') || '(none)';
 }
