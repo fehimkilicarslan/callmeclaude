@@ -27,4 +27,11 @@ class QuickCallTest {
         // The call itself says "your computer can't be reached", as from the home screen.
         assertEquals(QuickCall.PLACE_CALL, decideQuickCall(paired = true, callLive = false, micGranted = true, connected = false))
     }
+
+    @Test fun tileFollowsPairingAndConnection() {
+        assertEquals(TileView(false, "Not paired"), tileView(paired = false, connected = false, inCall = false))
+        assertEquals(TileView(false, "Not connected"), tileView(paired = true, connected = false, inCall = false))
+        assertEquals(TileView(true, "Ready"), tileView(paired = true, connected = true, inCall = false))
+        assertEquals(TileView(true, "In a call"), tileView(paired = true, connected = false, inCall = true))
+    }
 }

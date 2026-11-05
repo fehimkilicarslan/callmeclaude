@@ -96,6 +96,18 @@
                 android:value="Keeps a WebSocket open to the user's own paired computer so it can ring this phone when a Claude Code session needs the user. No push service is used." />
         </service>
 
+        <!-- "Call Claude" quick settings tile; tapping opens CallClaudeActivity. -->
+        <service
+            android:name=".CallClaudeTileService"
+            android:exported="true"
+            android:icon="@drawable/ic_call"
+            android:label="@string/call_claude"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+        </service>
+
         <service
             android:name=".calls.CmcConnectionService"
             android:exported="true"
