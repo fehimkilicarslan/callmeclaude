@@ -57,6 +57,29 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <!-- Long-press the icon: "Call Claude" (CallClaudeActivity). -->
+            <meta-data
+                android:name="android.app.shortcuts"
+                android:resource="@xml/shortcuts" />
+        </activity>
+
+        <!--
+            "Call Claude" from outside the app: app shortcut, quick settings tile, optional launcher
+            entry. Invisible; decides and finishes. Own empty task so it never drags the main screen
+            along, and shown over the lock screen so the tile can call without unlocking.
+        -->
+        <activity
+            android:name=".CallClaudeActivity"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:showWhenLocked="true"
+            android:taskAffinity=""
+            android:theme="@android:style/Theme.Translucent.NoTitleBar">
+            <intent-filter>
+                <action android:name="dev.callmeclaude.action.CALL_CLAUDE" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
         </activity>
 
         <!--

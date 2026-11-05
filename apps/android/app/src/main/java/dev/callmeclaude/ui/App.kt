@@ -58,6 +58,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.flowWithLifecycle
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.filterNotNull
 import androidx.compose.foundation.clickable
 import dev.callmeclaude.ACCESS_LOCAL_NETWORK
@@ -69,7 +70,7 @@ import dev.callmeclaude.calls.CallManager
 import dev.callmeclaude.homeWarnings
 
 @Composable
-fun App(hub: HubClient, calls: CallManager) {
+fun App(hub: HubClient, calls: CallManager, callRequest: MutableStateFlow<Boolean>) {
     CmcTheme {
         val pairing by hub.pairing.collectAsStateWithLifecycle()
         val call by calls.ui.collectAsStateWithLifecycle()
@@ -81,7 +82,7 @@ fun App(hub: HubClient, calls: CallManager) {
                 BackHandler { showSettings = false }
                 SettingsScreen(hub, onDone = { showSettings = false })
             }
-            else -> HomeScreen(hub, calls, onSettings = { showSettings = true })
+            else -> HomeScreen(hub, calls, callRequest, onSettings = { showSettings = true })
         }
     }
 }
@@ -99,7 +100,7 @@ private val modes = listOf(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun HomeScreen(hub: HubClient, calls: CallManager, onSettings: () -> Unit) {
+private fun HomeScreen(hub: HubClient, calls: CallManager, callRequest: MutableStateFlow<Boolean>, onSettings: () -> Unit) {
     val connected by hub.connected.collectAsStateWithLifecycle()
     val snapshot by hub.snapshot.collectAsStateWithLifecycle()
     val status by hub.status.collectAsStateWithLifecycle()
@@ -119,6 +120,14 @@ private fun HomeScreen(hub: HubClient, calls: CallManager, onSettings: () -> Uni
     val placeCall = {
         if (context.checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) calls.placeCall()
         else micLauncher.launch(Manifest.permission.RECORD_AUDIO)
+    }
+    // A shortcut / tile / launcher entry that found the microphone missing: same as tapping the button.
+    val requested by callRequest.collectAsStateWithLifecycle()
+    LaunchedEffect(requested) {
+        if (requested) {
+            callRequest.value = false
+            placeCall()
+        }
     }
 
     val sessions = snapshot?.sessions.orEmpty()
