@@ -12,11 +12,15 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import dev.callmeclaude.ui.App
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.distinctUntilChangedBy
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
     private val hub get() = (application as CallMeClaudeApp).hub
+
+    /** A quick entry point asked for a call that needs the home screen first (microphone prompt). */
+    private val callRequest = MutableStateFlow(false)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -25,8 +29,11 @@ class MainActivity : ComponentActivity() {
             statusBarStyle = SystemBarStyle.dark(Color.TRANSPARENT),
             navigationBarStyle = SystemBarStyle.dark(Color.TRANSPARENT),
         )
-        if (savedInstanceState == null) acceptDebugPairing(intent)
-        setContent { App(hub, (application as CallMeClaudeApp).calls) }
+        if (savedInstanceState == null) {
+            acceptDebugPairing(intent)
+            acceptCallRequest(intent)
+        }
+        setContent { App(hub, (application as CallMeClaudeApp).calls, callRequest) }
         // Paired → keep the hub connection in the foreground service; unpaired → stop it.
         // Started from here because foreground services can't be started from the background.
         lifecycleScope.launch {
@@ -39,6 +46,7 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         acceptDebugPairing(intent)
+        acceptCallRequest(intent)
     }
 
     override fun onStart() {
@@ -49,6 +57,17 @@ class MainActivity : ComponentActivity() {
     override fun onStop() {
         super.onStop()
         hub.setActive("ui", false)
+    }
+
+    /**
+     * Sent by [CallClaudeActivity] when the microphone permission is missing: the home screen runs
+     * its own "Call Claude" (ask, then call). Once only: not again from recents or a recreation.
+     */
+    private fun acceptCallRequest(intent: Intent?) {
+        if (intent?.action != ACTION_CALL_CLAUDE) return
+        if (intent.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY != 0) return
+        setIntent(Intent(intent).setAction(Intent.ACTION_MAIN))
+        if (hub.pairing.value != null) callRequest.value = true
     }
 
     private fun acceptDebugPairing(intent: Intent?) {
