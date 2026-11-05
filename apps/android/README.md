@@ -9,7 +9,7 @@ There is no push service: a foreground service keeps a WebSocket open to the hub
 | `HubService.kt` | Foreground service that holds the hub connection; idle it runs as `specialUse`, during a call as `specialUse\|phoneCall\|microphone` |
 | `HubClient.kt` | WebSocket (Tailscale/LAN), races all pairing addresses, reconnects; stops on a refused token (4003) |
 | `LinkPolicy.kt` | When to reconnect: back-off, network changes, liveness pings during a call |
-| `CallClaudeActivity.kt`, `QuickCall.kt` | Quick ways to call (app shortcut, quick settings tile, optional launcher entry): one invisible trampoline that reuses the home screen's "Call Claude" |
+| `CallClaudeActivity.kt`, `QuickCall.kt` | Quick ways to call (app shortcut, quick settings tile): one invisible trampoline that reuses the home screen's "Call Claude" |
 | `BootReceiver.kt` | Starts the service after a reboot or an app update, if the phone is paired |
 | `calls/` | Telecom integration, lock-screen ringing, audio route picker, microphone → hub (PCM16 16 kHz), hub → speaker (PCM16 24 kHz) |
 | `RemoteLog.kt`, `AppLog.kt` | Diagnostics forwarded to the hub (redacted, rate-limited) |
@@ -38,15 +38,14 @@ If the hub's token changes (`cmc pair --rotate`, or a new setup), the app stops 
 
 ## Starting a call quickly
 
-Besides the button on the home screen, three ways start the call to Claude straight away. All of them land in the same place (`CallClaudeActivity`) and behave like the button: not paired opens pairing; during a call they bring the call screen forward instead of starting a second one; without the microphone permission the app opens and asks first; if the computer can't be reached, the call says so. They also work when the app isn't running.
+Besides the button on the home screen, two ways start the call to Claude straight away. Both land in the same place (`CallClaudeActivity`) and behave like the button: not paired opens pairing; during a call they bring the call screen forward instead of starting a second one; without the microphone permission the app opens and asks first; if the computer can't be reached, the call says so. They also work when the app isn't running.
 
 - **App shortcut:** long-press the CallMeClaude icon and tap **Call Claude**. You can drag it to the home screen as its own icon.
 - **Quick settings tile:** edit the quick settings panel and add **Call Claude**. It is highlighted while the computer is connected and shows "Not paired" or "Not connected" otherwise. It also works on the lock screen: the call screen opens over it without unlocking (measured on a Galaxy S25, One UI 9).
-- **"Call Claude" in the app list (optional, off by default):** **Settings › Quick call**. When on, a second icon named **Call Claude** appears in the app list; opening it calls. It is meant for routines and voice assistants that can only open apps.
 
-**Samsung, by voice:** One UI 7 removed Bixby Quick Commands, but a manual routine can be started by voice. In Modes and Routines create a routine (for example "Agent") whose action opens the **Call Claude** app shortcut, then say "Bixby, run Agent routine". Measured on a Galaxy S25 (One UI 9): the call starts directly. A routine that opens the optional **Call Claude** app-list entry may work as well.
+**Samsung, by voice:** in Modes and Routines create a manual routine (for example "Agent") and, as its action, pick CallMeClaude's **Call Claude** app shortcut. Then say "Bixby, run Agent routine": the call starts directly (verified on a Galaxy S25, One UI 9). Bixby Quick Commands, the older way to do this, were removed in One UI 7.
 
-**Other voice assistants:** assistants that can "open an app" may open the **Call Claude** entry. Google Assistant did not in our test: "Hey Google, open Call Claude" opened the main CallMeClaude app (which doesn't call), because it matched the app's own name.
+**Google Assistant:** "Hey Google, open …" only opens the main CallMeClaude app; it doesn't start a call.
 
 ## Permissions, and why
 
