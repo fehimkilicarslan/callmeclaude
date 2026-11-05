@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:enabled="true"
+        android:icon="@drawable/ic_shortcut_call"
+        android:shortcutId="call_claude"
+        android:shortcutLongLabel="@string/call_claude"
+        android:shortcutShortLabel="@string/call_claude">
+        <intent
+            android:action="dev.callmeclaude.action.CALL_CLAUDE"
+            android:targetClass="dev.callmeclaude.CallClaudeActivity"
+            android:targetPackage="dev.callmeclaude" />
+    </shortcut>
+</shortcuts>

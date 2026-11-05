@@ -9,6 +9,7 @@ There is no push service: a foreground service keeps a WebSocket open to the hub
 | `HubService.kt` | Foreground service that holds the hub connection; idle it runs as `specialUse`, during a call as `specialUse\|phoneCall\|microphone` |
 | `HubClient.kt` | WebSocket (Tailscale/LAN), races all pairing addresses, reconnects; stops on a refused token (4003) |
 | `LinkPolicy.kt` | When to reconnect: back-off, network changes, liveness pings during a call |
+| `CallClaudeActivity.kt`, `QuickCall.kt` | Quick ways to call (app shortcut, quick settings tile): one invisible trampoline that reuses the home screen's "Call Claude" |
 | `BootReceiver.kt` | Starts the service after a reboot or an app update, if the phone is paired |
 | `calls/` | Telecom integration, lock-screen ringing, audio route picker, microphone → hub (PCM16 16 kHz), hub → speaker (PCM16 24 kHz) |
 | `RemoteLog.kt`, `AppLog.kt` | Diagnostics forwarded to the hub (redacted, rate-limited) |
@@ -34,6 +35,17 @@ On the computer run `cmc pair`. In the app tap **Scan QR code**, or paste the pa
 To unpair: on the home screen tap **Settings** (top right) or the connection line under the title; **Unpair this computer** is the first thing in Settings.
 
 If the hub's token changes (`cmc pair --rotate`, or a new setup), the app stops retrying and shows **Pairing is no longer valid** with a **Pair again** button, which forgets the old pairing and opens the QR screen.
+
+## Starting a call quickly
+
+Besides the button on the home screen, two ways start the call to Claude straight away. Both land in the same place (`CallClaudeActivity`) and behave like the button: not paired opens pairing; during a call they bring the call screen forward instead of starting a second one; without the microphone permission the app opens and asks first; if the computer can't be reached, the call says so. They also work when the app isn't running.
+
+- **App shortcut:** long-press the CallMeClaude icon and tap **Call Claude**. You can drag it to the home screen as its own icon.
+- **Quick settings tile:** edit the quick settings panel and add **Call Claude**. It is highlighted while the computer is connected and shows "Not paired" or "Not connected" otherwise. It also works on the lock screen: the call screen opens over it without unlocking (measured on a Galaxy S25, One UI 9).
+
+**Samsung, by voice:** in Modes and Routines create a manual routine (for example "Agent") and, as its action, pick CallMeClaude's **Call Claude** app shortcut. Then say "Bixby, run Agent routine": the call starts directly (verified on a Galaxy S25, One UI 9). Bixby Quick Commands, the older way to do this, were removed in One UI 7.
+
+**Google Assistant:** "Hey Google, open …" only opens the main CallMeClaude app; it doesn't start a call.
 
 ## Permissions, and why
 
@@ -66,13 +78,13 @@ Install [Tailscale](https://tailscale.com) on the computer and on the phone, log
 
 ## Logs
 
-The app forwards its diagnostics to the hub, which writes them to `~/.callmeclaude/logs/app-YYYY-MM-DD.log` (prefixed with the phone's name). Only connection, call, audio-route and service events are sent (the same ones as iOS), at most 30 lines in a burst and then one line every 2 s; dropped lines are counted. The token, addresses, host names, the phone's and the computer's names are replaced before anything is queued, and transcripts are never logged. `adb logcat -s cmc.hub cmc.call cmc.audio cmc.telecom cmc.service cmc.boot cmc.net` shows everything on the phone itself.
+The app forwards its diagnostics to the hub, which writes them to `~/.callmeclaude/logs/app-YYYY-MM-DD.log` (prefixed with the phone's name). Only connection, call, audio-route and service events are sent (the same ones as iOS), at most 30 lines in a burst and then one line every 2 s; dropped lines are counted. The token, addresses, host names, the phone's and the computer's names are replaced before anything is queued, and transcripts are never logged. `adb logcat -s cmc.hub cmc.call cmc.audio cmc.telecom cmc.service cmc.boot cmc.net cmc.quick` shows everything on the phone itself.
 
 ## Known limits
 
 - **No push.** If Android or the manufacturer kills the app, or the phone has no network, the hub can't ring it. The app can't detect from the inside that it was killed; it only knows when it runs again.
 - **Reboots need one unlock.** The service starts on `BOOT_COMPLETED`, which arrives only after you unlock the phone once after a reboot (the pairing key is in credential-encrypted storage).
-- **Force stop disables everything.** After *Force stop* in the app settings, Android delivers nothing (not even the boot broadcast) until you open the app again.
+- **Force stop disables everything.** After *Force stop* in the app settings, Android delivers nothing (not even the boot broadcast) until you open the app again (calling Claude from the shortcut or the tile counts).
 - **Background starts.** Without the battery exemption Android may refuse to restart the service from the background; opening the app always fixes it.
 - **Self-managed Telecom API.** `PhoneAccount.CAPABILITY_SELF_MANAGED` is deprecated in API 37 in favour of the Core Telecom library; it still works, and moving would mean a new dependency and dropping API 29–33 behaviour.
 - **LAN only without Tailscale.** A pairing made with only LAN addresses doesn't work on mobile data.
